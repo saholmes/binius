@@ -8,9 +8,10 @@ use anyhow::Result;
 use array_util::ArrayExt as _;
 use binius_core::oracle::ShiftVariant;
 use binius_field::{
-	linear_transformation::PackedTransformationFactory, Field, PackedExtension,
-	PackedFieldIndexable, PackedSubfield, TowerField,
+	as_packed_field::PackScalar, underlier::WithUnderlier, ExtensionField, Field, PackedExtension,
+	PackedFieldIndexable, TowerField,
 };
+use bytemuck::Pod;
 pub use state::{StateMatrix, StateRow};
 
 use crate::builder::{Col, Expr, TableBuilder, TableWitnessSegment, B1, B128, B8};
@@ -91,7 +92,11 @@ impl Keccakf {
 	/// Creates a new instance of the gadget.
 	///
 	/// See the struct documentation for more details.
-	pub fn new(table: &mut TableBuilder, state_in: StateMatrix<PackedLane8>) -> Self {
+	pub fn new<F>(table: &mut TableBuilder<F>, state_in: StateMatrix<PackedLane8>) -> Self
+	where
+		F: TowerField + ExtensionField<B1>,
+		<F as WithUnderlier>::Underlier: PackScalar<B1>,
+	{
 		let mut state = state_in;
 		let batches = array::from_fn(|batch_no| {
 			let batch = RoundBatch::new(
@@ -143,8 +148,8 @@ impl Keccakf {
 	/// [`Self::populate_state_in`].
 	pub fn populate<P>(&self, index: &mut TableWitnessSegment<P>) -> Result<()>
 	where
-		P: PackedFieldIndexable<Scalar = B128> + PackedExtension<B1> + PackedExtension<B8>,
-		PackedSubfield<P, B8>: PackedTransformationFactory<PackedSubfield<P, B8>>,
+		P: PackedFieldIndexable + PackedExtension<B1> + PackedExtension<B8>,
+		P::Scalar: TowerField + Pod + ExtensionField<B1> + ExtensionField<B8>,
 	{
 		// `state_in` for the first track of the first batch specifies the initial state for
 		// permutation. Read it out, gather trace and populate each batch.
@@ -216,8 +221,8 @@ impl Keccakf {
 		state_ins: impl IntoIterator<Item = &'a StateMatrix<u64>>,
 	) -> Result<()>
 	where
-		P: PackedFieldIndexable<Scalar = B128> + PackedExtension<B1> + PackedExtension<B8>,
-		PackedSubfield<P, B8>: PackedTransformationFactory<PackedSubfield<P, B8>>,
+		P: PackedFieldIndexable + PackedExtension<B1> + PackedExtension<B8>,
+		P::Scalar: TowerField + Pod + ExtensionField<B1> + ExtensionField<B8>,
 	{
 		self.batches[0].populate_state_in(index, STATE_IN_TRACK, state_ins)?;
 		Ok(())
@@ -231,8 +236,8 @@ impl Keccakf {
 		index: &'a TableWitnessSegment<P>,
 	) -> Result<impl Iterator<Item = StateMatrix<u64>> + 'a>
 	where
-		P: PackedFieldIndexable<Scalar = B128> + PackedExtension<B1> + PackedExtension<B8>,
-		PackedSubfield<P, B8>: PackedTransformationFactory<PackedSubfield<P, B8>>,
+		P: PackedFieldIndexable + PackedExtension<B1> + PackedExtension<B8>,
+		P::Scalar: TowerField + Pod + ExtensionField<B1> + ExtensionField<B8>,
 	{
 		self.batches[2].read_state_outs(index, STATE_OUT_TRACK)
 	}
@@ -255,7 +260,11 @@ struct RoundBatch {
 }
 
 impl RoundBatch {
-	fn new(table: &mut TableBuilder, state_in: StateMatrix<PackedLane8>, batch_no: usize) -> Self {
+	fn new<F>(table: &mut TableBuilder<F>, state_in: StateMatrix<PackedLane8>, batch_no: usize) -> Self
+	where
+		F: TowerField + ExtensionField<B1>,
+		<F as WithUnderlier>::Underlier: PackScalar<B1>,
+	{
 		assert!(batch_no < BATCHES_PER_PERMUTATION);
 		let state_out =
 			StateMatrix::from_fn(|(x, y)| table.add_committed(format!("state_out[{x},{y}]")));
@@ -353,8 +362,8 @@ impl RoundBatch {
 		pts: &[trace::PermutationTrace],
 	) -> Result<()>
 	where
-		P: PackedFieldIndexable<Scalar = B128> + PackedExtension<B1> + PackedExtension<B8>,
-		PackedSubfield<P, B8>: PackedTransformationFactory<PackedSubfield<P, B8>>,
+		P: PackedFieldIndexable + PackedExtension<B1> + PackedExtension<B8>,
+		P::Scalar: TowerField + Pod + ExtensionField<B1> + ExtensionField<B8>,
 	{
 		for (k, pt) in pts.iter().enumerate() {
 			// Gather all batch round traces for the batch number.
@@ -423,8 +432,8 @@ impl RoundBatch {
 		state_ins: impl IntoIterator<Item = &'a StateMatrix<u64>>,
 	) -> Result<()>
 	where
-		P: PackedFieldIndexable<Scalar = B128> + PackedExtension<B1> + PackedExtension<B8>,
-		PackedSubfield<P, B8>: PackedTransformationFactory<PackedSubfield<P, B8>>,
+		P: PackedFieldIndexable + PackedExtension<B1> + PackedExtension<B8>,
+		P::Scalar: TowerField + Pod + ExtensionField<B1> + ExtensionField<B8>,
 	{
 		for (k, state_in) in state_ins.into_iter().enumerate() {
 			for x in 0..5 {
@@ -444,8 +453,8 @@ impl RoundBatch {
 		track: usize,
 	) -> Result<impl Iterator<Item = StateMatrix<u64>> + 'a>
 	where
-		P: PackedFieldIndexable<Scalar = B128> + PackedExtension<B1> + PackedExtension<B8>,
-		PackedSubfield<P, B8>: PackedTransformationFactory<PackedSubfield<P, B8>>,
+		P: PackedFieldIndexable + PackedExtension<B1> + PackedExtension<B8>,
+		P::Scalar: TowerField + Pod + ExtensionField<B1> + ExtensionField<B8>,
 	{
 		let state_in = self
 			.state_in
@@ -464,8 +473,8 @@ impl RoundBatch {
 		track: usize,
 	) -> Result<impl Iterator<Item = StateMatrix<u64>> + 'a>
 	where
-		P: PackedFieldIndexable<Scalar = B128> + PackedExtension<B1> + PackedExtension<B8>,
-		PackedSubfield<P, B8>: PackedTransformationFactory<PackedSubfield<P, B8>>,
+		P: PackedFieldIndexable + PackedExtension<B1> + PackedExtension<B8>,
+		P::Scalar: TowerField + Pod + ExtensionField<B1> + ExtensionField<B8>,
 	{
 		let state_out = self
 			.state_out

@@ -8,9 +8,9 @@ use binius_core::{
 	transparent::MultilinearExtensionTransparent,
 };
 use binius_field::{
-	arch::OptimalUnderlier,
 	as_packed_field::{PackScalar, PackedType},
 	packed::pack_slice,
+	underlier::WithUnderlier,
 	ExtensionField, TowerField,
 };
 use binius_utils::{
@@ -302,14 +302,25 @@ impl<'a, F: TowerField> TableBuilder<'a, F> {
 	where
 		FSub: TowerField,
 		F: ExtensionField<FSub>,
-		OptimalUnderlier: PackScalar<FSub> + PackScalar<F>,
+		// Build the transparent constant polynomial over `F`'s OWN underlier rather
+		// than the hardcoded `OptimalUnderlier`. `ColumnDef::Constant` stores this as
+		// a scalar-erased `Arc<dyn MultivariatePoly<F>>`, so the packing underlier is
+		// an internal detail that does NOT affect proof output: for `F = B128` this is
+		// `u128` (128-bit, width-1 — bit-identical to the old `OptimalUnderlier`
+		// packing for evaluation purposes); for a >128-bit top field such as B256 it is
+		// that field's underlier (the ONLY underlier that can `PackScalar` it), which is
+		// what makes a top field above tower level 7 expressible here.
+		// `F::Underlier: PackScalar<F>` is guaranteed by `Field`; we additionally need
+		// it to pack the subfield `FSub`.
+		<F as WithUnderlier>::Underlier: PackScalar<FSub>,
 	{
 		let namespaced_name = self.namespaced_name(name);
 		let n_vars = log2_strict_usize(VALUES_PER_ROW);
-		let packed_values: Vec<PackedType<OptimalUnderlier, FSub>> = pack_slice(&constants);
+		let packed_values: Vec<PackedType<<F as WithUnderlier>::Underlier, FSub>> =
+			pack_slice(&constants);
 		let mle = MultilinearExtensionTransparent::<
-			PackedType<OptimalUnderlier, FSub>,
-			PackedType<OptimalUnderlier, F>,
+			PackedType<<F as WithUnderlier>::Underlier, FSub>,
+			PackedType<<F as WithUnderlier>::Underlier, F>,
 			_,
 		>::from_values_and_mu(packed_values, n_vars)
 		.unwrap();
