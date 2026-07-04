@@ -201,37 +201,52 @@ where
 	Tower: TowerFamily,
 	FExt<Tower>: PackedTop<Tower>,
 {
+	// Dispatch on $\kappa = \log_2[\FExt : \text{subfield}]$ derived from the type, so
+	// the arms track `FExt`'s tower level rather than assuming a level-7 (128-bit)
+	// FExt: level 7 -> {7,4,3,2,1,0}, level 8 -> {8,5,4,3,2,0}, etc.
 	let eq_ind = match suffix_desc.kappa {
-		7 => Box::new(RingSwitchEqInd::<Tower::B1, _>::new(
-			suffix_desc.suffix.clone(),
-			row_batch_coeffs,
-			mixing_coeff,
-		)?) as Box<dyn MultivariatePoly<_>>,
-		4 => Box::new(RingSwitchEqInd::<Tower::B8, _>::new(
-			suffix_desc.suffix.clone(),
-			row_batch_coeffs,
-			mixing_coeff,
-		)?) as Box<dyn MultivariatePoly<_>>,
-		3 => Box::new(RingSwitchEqInd::<Tower::B16, _>::new(
-			suffix_desc.suffix.clone(),
-			row_batch_coeffs,
-			mixing_coeff,
-		)?) as Box<dyn MultivariatePoly<_>>,
-		2 => Box::new(RingSwitchEqInd::<Tower::B32, _>::new(
-			suffix_desc.suffix.clone(),
-			row_batch_coeffs,
-			mixing_coeff,
-		)?) as Box<dyn MultivariatePoly<_>>,
-		1 => Box::new(RingSwitchEqInd::<Tower::B64, _>::new(
-			suffix_desc.suffix.clone(),
-			row_batch_coeffs,
-			mixing_coeff,
-		)?) as Box<dyn MultivariatePoly<_>>,
-		0 => Box::new(RingSwitchEqInd::<Tower::B128, _>::new(
-			suffix_desc.suffix.clone(),
-			row_batch_coeffs,
-			mixing_coeff,
-		)?) as Box<dyn MultivariatePoly<_>>,
+		k if k == crate::tensor_algebra::TensorAlgebra::<Tower::B1, FExt<Tower>>::kappa() => {
+			Box::new(RingSwitchEqInd::<Tower::B1, _>::new(
+				suffix_desc.suffix.clone(),
+				row_batch_coeffs,
+				mixing_coeff,
+			)?) as Box<dyn MultivariatePoly<_>>
+		}
+		k if k == crate::tensor_algebra::TensorAlgebra::<Tower::B8, FExt<Tower>>::kappa() => {
+			Box::new(RingSwitchEqInd::<Tower::B8, _>::new(
+				suffix_desc.suffix.clone(),
+				row_batch_coeffs,
+				mixing_coeff,
+			)?) as Box<dyn MultivariatePoly<_>>
+		}
+		k if k == crate::tensor_algebra::TensorAlgebra::<Tower::B16, FExt<Tower>>::kappa() => {
+			Box::new(RingSwitchEqInd::<Tower::B16, _>::new(
+				suffix_desc.suffix.clone(),
+				row_batch_coeffs,
+				mixing_coeff,
+			)?) as Box<dyn MultivariatePoly<_>>
+		}
+		k if k == crate::tensor_algebra::TensorAlgebra::<Tower::B32, FExt<Tower>>::kappa() => {
+			Box::new(RingSwitchEqInd::<Tower::B32, _>::new(
+				suffix_desc.suffix.clone(),
+				row_batch_coeffs,
+				mixing_coeff,
+			)?) as Box<dyn MultivariatePoly<_>>
+		}
+		k if k == crate::tensor_algebra::TensorAlgebra::<Tower::B64, FExt<Tower>>::kappa() => {
+			Box::new(RingSwitchEqInd::<Tower::B64, _>::new(
+				suffix_desc.suffix.clone(),
+				row_batch_coeffs,
+				mixing_coeff,
+			)?) as Box<dyn MultivariatePoly<_>>
+		}
+		k if k == crate::tensor_algebra::TensorAlgebra::<Tower::B128, FExt<Tower>>::kappa() => {
+			Box::new(RingSwitchEqInd::<Tower::B128, _>::new(
+				suffix_desc.suffix.clone(),
+				row_batch_coeffs,
+				mixing_coeff,
+			)?) as Box<dyn MultivariatePoly<_>>
+		}
 		_ => {
 			return Err(Error::PackingDegreeNotSupported {
 				kappa: suffix_desc.kappa,

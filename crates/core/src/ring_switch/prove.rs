@@ -285,43 +285,58 @@ where
 	P: PackedFieldIndexable<Scalar = FExt<Tower>>,
 	Tower: TowerFamily,
 {
+	// Dispatch on $\kappa = \log_2[\FExt : \text{subfield}]$ derived from the type, so
+	// the arms track `FExt`'s tower level rather than assuming a level-7 (128-bit)
+	// FExt: level 7 -> {7,4,3,2,1,0}, level 8 -> {8,5,4,3,2,0}, etc.
 	let eq_ind = match suffix_desc.kappa {
-		7 => RingSwitchEqInd::<Tower::B1, _>::new(
-			suffix_desc.suffix.clone(),
-			row_batch_coeffs,
-			mixing_coeff,
-		)?
-		.multilinear_extension::<P>(),
-		4 => RingSwitchEqInd::<Tower::B8, _>::new(
-			suffix_desc.suffix.clone(),
-			row_batch_coeffs,
-			mixing_coeff,
-		)?
-		.multilinear_extension(),
-		3 => RingSwitchEqInd::<Tower::B16, _>::new(
-			suffix_desc.suffix.clone(),
-			row_batch_coeffs,
-			mixing_coeff,
-		)?
-		.multilinear_extension(),
-		2 => RingSwitchEqInd::<Tower::B32, _>::new(
-			suffix_desc.suffix.clone(),
-			row_batch_coeffs,
-			mixing_coeff,
-		)?
-		.multilinear_extension(),
-		1 => RingSwitchEqInd::<Tower::B64, _>::new(
-			suffix_desc.suffix.clone(),
-			row_batch_coeffs,
-			mixing_coeff,
-		)?
-		.multilinear_extension(),
-		0 => RingSwitchEqInd::<Tower::B128, _>::new(
-			suffix_desc.suffix.clone(),
-			row_batch_coeffs,
-			mixing_coeff,
-		)?
-		.multilinear_extension(),
+		k if k == crate::tensor_algebra::TensorAlgebra::<Tower::B1, FExt<Tower>>::kappa() => {
+			RingSwitchEqInd::<Tower::B1, _>::new(
+				suffix_desc.suffix.clone(),
+				row_batch_coeffs,
+				mixing_coeff,
+			)?
+			.multilinear_extension::<P>()
+		}
+		k if k == crate::tensor_algebra::TensorAlgebra::<Tower::B8, FExt<Tower>>::kappa() => {
+			RingSwitchEqInd::<Tower::B8, _>::new(
+				suffix_desc.suffix.clone(),
+				row_batch_coeffs,
+				mixing_coeff,
+			)?
+			.multilinear_extension()
+		}
+		k if k == crate::tensor_algebra::TensorAlgebra::<Tower::B16, FExt<Tower>>::kappa() => {
+			RingSwitchEqInd::<Tower::B16, _>::new(
+				suffix_desc.suffix.clone(),
+				row_batch_coeffs,
+				mixing_coeff,
+			)?
+			.multilinear_extension()
+		}
+		k if k == crate::tensor_algebra::TensorAlgebra::<Tower::B32, FExt<Tower>>::kappa() => {
+			RingSwitchEqInd::<Tower::B32, _>::new(
+				suffix_desc.suffix.clone(),
+				row_batch_coeffs,
+				mixing_coeff,
+			)?
+			.multilinear_extension()
+		}
+		k if k == crate::tensor_algebra::TensorAlgebra::<Tower::B64, FExt<Tower>>::kappa() => {
+			RingSwitchEqInd::<Tower::B64, _>::new(
+				suffix_desc.suffix.clone(),
+				row_batch_coeffs,
+				mixing_coeff,
+			)?
+			.multilinear_extension()
+		}
+		k if k == crate::tensor_algebra::TensorAlgebra::<Tower::B128, FExt<Tower>>::kappa() => {
+			RingSwitchEqInd::<Tower::B128, _>::new(
+				suffix_desc.suffix.clone(),
+				row_batch_coeffs,
+				mixing_coeff,
+			)?
+			.multilinear_extension()
+		}
 		_ => Err(Error::PackingDegreeNotSupported {
 			kappa: suffix_desc.kappa,
 		}),

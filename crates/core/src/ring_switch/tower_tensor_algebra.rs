@@ -24,13 +24,29 @@ impl<Tower: TowerFamily> TowerTensorAlgebra<Tower> {
 	///
 	/// * `elems` must have length `FE::DEGREE`, otherwise this will pad or truncate.
 	pub fn new(kappa: usize, elems: Vec<FExt<Tower>>) -> Result<Self, Error> {
+		// The dispatch key is $\kappa = \log_2[\FExt : \text{subfield}]$, which shifts
+		// with `FExt`'s tower level. Rather than hardcode the level-7 (128-bit FExt)
+		// literals {7,4,3,2,1,0}, derive each arm's $\kappa$ from the type, so a
+		// level-8 `FExt` (e.g. a 256-bit B128 slot) auto-yields {8,5,4,3,2,0} etc.
 		match kappa {
-			7 => Ok(Self::B1(TensorAlgebra::new(elems))),
-			4 => Ok(Self::B8(TensorAlgebra::new(elems))),
-			3 => Ok(Self::B16(TensorAlgebra::new(elems))),
-			2 => Ok(Self::B32(TensorAlgebra::new(elems))),
-			1 => Ok(Self::B64(TensorAlgebra::new(elems))),
-			0 => Ok(Self::B128(TensorAlgebra::new(elems))),
+			k if k == TensorAlgebra::<Tower::B1, FExt<Tower>>::kappa() => {
+				Ok(Self::B1(TensorAlgebra::new(elems)))
+			}
+			k if k == TensorAlgebra::<Tower::B8, FExt<Tower>>::kappa() => {
+				Ok(Self::B8(TensorAlgebra::new(elems)))
+			}
+			k if k == TensorAlgebra::<Tower::B16, FExt<Tower>>::kappa() => {
+				Ok(Self::B16(TensorAlgebra::new(elems)))
+			}
+			k if k == TensorAlgebra::<Tower::B32, FExt<Tower>>::kappa() => {
+				Ok(Self::B32(TensorAlgebra::new(elems)))
+			}
+			k if k == TensorAlgebra::<Tower::B64, FExt<Tower>>::kappa() => {
+				Ok(Self::B64(TensorAlgebra::new(elems)))
+			}
+			k if k == TensorAlgebra::<Tower::B128, FExt<Tower>>::kappa() => {
+				Ok(Self::B128(TensorAlgebra::new(elems)))
+			}
 			_ => Err(Error::PackingDegreeNotSupported { kappa }),
 		}
 	}
@@ -38,25 +54,40 @@ impl<Tower: TowerFamily> TowerTensorAlgebra<Tower> {
 	/// Returns the additive identity element, zero.
 	pub fn zero(kappa: usize) -> Result<Self, Error> {
 		match kappa {
-			7 => Ok(Self::B1(TensorAlgebra::default())),
-			4 => Ok(Self::B8(TensorAlgebra::default())),
-			3 => Ok(Self::B16(TensorAlgebra::default())),
-			2 => Ok(Self::B32(TensorAlgebra::default())),
-			1 => Ok(Self::B64(TensorAlgebra::default())),
-			0 => Ok(Self::B128(TensorAlgebra::default())),
+			k if k == TensorAlgebra::<Tower::B1, FExt<Tower>>::kappa() => {
+				Ok(Self::B1(TensorAlgebra::default()))
+			}
+			k if k == TensorAlgebra::<Tower::B8, FExt<Tower>>::kappa() => {
+				Ok(Self::B8(TensorAlgebra::default()))
+			}
+			k if k == TensorAlgebra::<Tower::B16, FExt<Tower>>::kappa() => {
+				Ok(Self::B16(TensorAlgebra::default()))
+			}
+			k if k == TensorAlgebra::<Tower::B32, FExt<Tower>>::kappa() => {
+				Ok(Self::B32(TensorAlgebra::default()))
+			}
+			k if k == TensorAlgebra::<Tower::B64, FExt<Tower>>::kappa() => {
+				Ok(Self::B64(TensorAlgebra::default()))
+			}
+			k if k == TensorAlgebra::<Tower::B128, FExt<Tower>>::kappa() => {
+				Ok(Self::B128(TensorAlgebra::default()))
+			}
 			_ => Err(Error::PackingDegreeNotSupported { kappa }),
 		}
 	}
 
 	/// Returns $\kappa$, the base-2 logarithm of the extension degree.
-	pub const fn kappa(&self) -> usize {
+	///
+	/// Derived per-variant from the type so it tracks `FExt`'s tower level (level 7
+	/// gives {7,4,3,2,1,0}; level 8 gives {8,5,4,3,2,0}).
+	pub fn kappa(&self) -> usize {
 		match self {
-			Self::B1(_) => 7,
-			Self::B8(_) => 4,
-			Self::B16(_) => 3,
-			Self::B32(_) => 2,
-			Self::B64(_) => 1,
-			Self::B128(_) => 0,
+			Self::B1(_) => TensorAlgebra::<Tower::B1, FExt<Tower>>::kappa(),
+			Self::B8(_) => TensorAlgebra::<Tower::B8, FExt<Tower>>::kappa(),
+			Self::B16(_) => TensorAlgebra::<Tower::B16, FExt<Tower>>::kappa(),
+			Self::B32(_) => TensorAlgebra::<Tower::B32, FExt<Tower>>::kappa(),
+			Self::B64(_) => TensorAlgebra::<Tower::B64, FExt<Tower>>::kappa(),
+			Self::B128(_) => TensorAlgebra::<Tower::B128, FExt<Tower>>::kappa(),
 		}
 	}
 

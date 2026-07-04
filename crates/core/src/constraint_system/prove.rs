@@ -298,7 +298,12 @@ where
 		let base_tower_level = chain!(
 			multilinears
 				.iter()
-				.map(|multilinear| 7 - multilinear.log_extension_degree()),
+				// `TOWER_LEVEL - log_extension_degree` is the base field's tower level.
+				// Use `FExt`'s actual tower level (7 for a 128-bit FExt, 8 for a 256-bit
+				// one) rather than the hardcoded 7.
+				.map(|multilinear| {
+					<FExt<Tower> as TowerField>::TOWER_LEVEL - multilinear.log_extension_degree()
+				}),
 			constraints
 				.iter()
 				.map(|constraint| constraint.composition.binary_tower_level())
@@ -326,6 +331,9 @@ where
 			5 => constructor.create::<Tower::B32>()?,
 			6 => constructor.create::<Tower::B64>()?,
 			7 => constructor.create::<Tower::B128>()?,
+			// A level-8 `FExt` (e.g. a 256-bit B128 slot) can carry a base field at
+			// tower level 8, which is the top field `Tower::B128` itself.
+			8 => constructor.create::<Tower::B128>()?,
 			_ => unreachable!(),
 		};
 
