@@ -1,4 +1,7 @@
 // Copyright 2025 Irreducible Inc.
+// Modified 2025 by Anonymous (Apache-2.0 derivative): add_constant now builds its
+// transparent constant polynomial over the top field's own underlier instead of a
+// hardcoded 128-bit underlier, enabling a top field above tower level 7.
 
 use std::sync::Arc;
 

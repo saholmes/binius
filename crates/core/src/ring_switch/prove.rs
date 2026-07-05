@@ -1,4 +1,7 @@
 // Copyright 2024-2025 Irreducible Inc.
+// Modified 2025 by Anonymous (Apache-2.0 derivative): generalized the ring-switch
+// make_ring_switch_eq_ind kappa dispatch to any FExt tower level (type-derived
+// guards replacing the hardcoded level-7 literals).
 
 use std::{iter, sync::Arc};
 

@@ -1,4 +1,7 @@
 // Copyright 2025 Irreducible Inc.
+// Modified 2025 by Anonymous (Apache-2.0 derivative): made the Keccak-f gadget
+// generic over its top field (relaxed the concrete BinaryField128b bindings), so
+// it can be built over a challenge field above tower level 7.
 
 //! SHA3-256 (Keccak) hash function verification gadgets.
 

@@ -1,4 +1,7 @@
 // Copyright 2024-2025 Irreducible Inc.
+// Modified 2025 by Anonymous (Apache-2.0 derivative): made the base-field
+// tower-level dispatch FExt-relative and added a level-8 arm, so a challenge
+// field above tower level 7 is supported.
 
 use std::{env, marker::PhantomData};
 

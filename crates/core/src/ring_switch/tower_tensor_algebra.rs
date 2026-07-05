@@ -1,4 +1,7 @@
 // Copyright 2024-2025 Irreducible Inc.
+// Modified 2025 by Anonymous (Apache-2.0 derivative): generalized the ring-switch
+// tensor-algebra kappa dispatch from the hardcoded tower-level-7 literals to
+// type-derived guards, so the challenge/extension field may sit at any tower level.
 
 use binius_field::tower::{PackedTop, TowerFamily};
 
