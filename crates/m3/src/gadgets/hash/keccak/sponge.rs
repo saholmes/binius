@@ -220,4 +220,88 @@ impl KeccakSponge {
 
 		Ok(())
 	}
+
+	/// Populate a **batch** of `hashes` — one independent sound hash per table row — to amortize the
+	/// fixed proving cost over the batch. `hashes[i]` is hash `i`'s `n_blocks` message blocks. Each
+	/// row runs the same constrained absorb chain across the wrapped permutations; the chain is
+	/// advanced using the gadget's own permutation outputs (no external Keccak). The table must have
+	/// been initialised with at least `hashes.len()` rows.
+	pub fn populate_batch<P>(
+		&self,
+		index: &mut TableWitnessSegment<P>,
+		hashes: &[Vec<StateMatrix<u64>>],
+	) -> Result<()>
+	where
+		P: PackedFieldIndexable + PackedExtension<B1> + PackedExtension<B8>,
+		P::Scalar: TowerField + Pod + ExtensionField<B1> + ExtensionField<B8>,
+	{
+		let n = hashes.len();
+		let nb = self.perms.len();
+		assert!(hashes.iter().all(|h| h.len() == nb), "each hash needs n_blocks message blocks");
+
+		let mut running: Vec<[u64; STATE_LANES]> = vec![[0u64; STATE_LANES]; n]; // per-hash running state
+		for b in 0..nb {
+			// Absorb block b into each hash's running state to form its permutation input (row i).
+			let inputs: Vec<StateMatrix<u64>> = (0..n)
+				.map(|i| {
+					let blk = hashes[i][b].as_inner();
+					let mut input = running[i];
+					for l in 0..self.rate_lanes {
+						input[l] ^= blk[l];
+					}
+					StateMatrix::from_values(input)
+				})
+				.collect();
+			self.perms[b].populate_state_in(index, inputs.iter())?;
+			self.perms[b].populate(index)?;
+
+			// Message columns (block b, row i in track 0) and aligned previous outputs (row i).
+			for i in 0..n {
+				let blk = hashes[i][b].as_inner();
+				for x in 0..5 {
+					for y in 0..5 {
+						let lane = x + 5 * y;
+						let mut cell =
+							index.get_mut_as::<u64, B1, { LANE_BITS * TRACKS }>(self.message[b][(x, y)])?;
+						cell[TRACKS * i] = if lane < self.rate_lanes { blk[lane] } else { 0 };
+						for t in 1..TRACKS {
+							cell[TRACKS * i + t] = 0;
+						}
+					}
+				}
+			}
+			if b >= 1 {
+				let prev_shift = &self.prev_shifts[b - 1];
+				for i in 0..n {
+					for x in 0..5 {
+						for y in 0..5 {
+							let lane = x + 5 * y;
+							let mut cell =
+								index.get_mut_as::<u64, B1, { LANE_BITS * TRACKS }>(prev_shift[(x, y)])?;
+							cell[TRACKS * i] = running[i][lane];
+							for t in 1..TRACKS {
+								cell[TRACKS * i + t] = 0;
+							}
+						}
+					}
+				}
+			}
+
+			// Advance each hash's running state from this permutation's output (row i).
+			let outs: Vec<StateMatrix<u64>> = self.perms[b].read_state_outs(index)?.collect();
+			for i in 0..n {
+				running[i] = *outs[i].as_inner();
+			}
+		}
+
+		// Track-0 selector (a constant column, filled on every row like the gadget's own link_sel).
+		let mut mask = index.get_mut_as::<u64, B1, { LANE_BITS * TRACKS }>(self.track0_mask)?;
+		for chunk in mask.chunks_exact_mut(TRACKS) {
+			chunk[0] = u64::MAX;
+			for t in 1..TRACKS {
+				chunk[t] = 0;
+			}
+		}
+		Ok(())
+	}
 }
