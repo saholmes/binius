@@ -19,9 +19,12 @@ pub use state::{StateMatrix, StateRow};
 
 use crate::builder::{Col, Expr, TableBuilder, TableWitnessSegment, B1, B128, B8};
 
+mod sponge;
 mod state;
 mod test_vector;
 mod trace;
+
+pub use sponge::KeccakSponge;
 
 // This implementation tries to be as close to the
 // [Keccak Specification Summary][keccak_spec_summary] and as such it is highly recommended to
