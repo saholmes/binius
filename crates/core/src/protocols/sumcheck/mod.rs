@@ -17,6 +17,7 @@ mod tests;
 pub mod verify_sumcheck;
 pub mod verify_zerocheck;
 pub mod zerocheck;
+pub mod zk;
 
 pub use common::{
 	equal_n_vars_check, immediate_switchover_heuristic, standard_switchover_heuristic,

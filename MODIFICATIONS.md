@@ -130,5 +130,20 @@ Binius's own test suite passes (`binius_core` 138/138, `binius_m3` unit tests).
 - `crates/core/src/protocols/fri/mod.rs`
   Register `mod zk_pcs;` and re-export `prove_combination`, `verify_combination`.
 
+- `crates/core/src/protocols/sumcheck/zk.rs` (new file)
+  A3 (zero-knowledge roadmap) — closes the "higher-level PIOP" caveat left open by Diamond's ZK PCS:
+  the constraint-system sumcheck reveals trace evaluations and must be masked too. `MaskCombine`
+  is the Libra/Chiesa–Forbes–Spooner masking composition `(f, g) -> f + rho*g`; running the standard
+  sumcheck with it over `[f, g]` (fresh random mask `g`, its sum `s` revealed, `rho` a verifier
+  challenge) is a zero-knowledge sumcheck for `f` — the emitted round polynomials belong to
+  `f + rho*g` and are masked by `g`. The test drives binius's own `RegularSumcheckProver` /
+  `batch_prove` / `batch_verify` end to end, confirming the masked sumcheck soundly reduces the
+  `f + rho*g` claim and that `v = combined_sum - rho*s` recovers the base sum without revealing `f`'s
+  round polynomials. Opt-in; wiring into `sumcheck::zerocheck` (the AIR constraint check) is the
+  remaining integration step.
+
+- `crates/core/src/protocols/sumcheck/mod.rs`
+  Register `pub mod zk;`.
+
 All other files are unmodified from upstream. This derivative work continues to be
 licensed under the Apache License, Version 2.0.
