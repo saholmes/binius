@@ -79,12 +79,39 @@ pub fn combine_masked<F: Field>(f: &[F], f_prime: &[F], alpha: F) -> Vec<F> {
 	f.iter().zip(f_prime).map(|(&fi, &gi)| alpha * fi + gi).collect()
 }
 
+/// Evaluation-domain view of technique-1 padding, for wiring into the BaseFold evaluation layer.
+///
+/// Where [`pad_message_high`] lays the padding out in the novel-polynomial (coefficient) basis that
+/// FRI encodes, this lays it out over the Boolean hypercube that the BaseFold sumcheck evaluates: it
+/// takes the `2^ell` hypercube evaluations of the committed multilinear `g` and returns the `2^{ell+1}`
+/// evaluations of an extended multilinear `G` on `ell+1` variables, with the new variable most
+/// significant — `G(x, 0) = g(x)` on the whole low half, and `kappa` random mask values in the high
+/// half `G(x, 1)`. The two layouts coincide byte-for-byte ([data ‖ mask]) precisely because the novel
+/// basis is triangular with respect to the subcube structure (this is why the padding is
+/// arithmetic-free). Because `G` restricted to the new variable `= 0` is exactly `g`, every
+/// evaluation the PCS actually proves — points of the form `(z, 0)` — is unchanged, while the FRI
+/// query domain (the `= 1` slice) is randomised. `kappa <= 2^ell`.
+pub fn extend_multilinear_zk<F: Field>(
+	hypercube_evals: &[F],
+	kappa: usize,
+	mut fill: impl FnMut(&mut [F]),
+) -> Vec<F> {
+	assert!(hypercube_evals.len().is_power_of_two(), "evaluation count must be a power of two (2^ell)");
+	assert!(kappa <= hypercube_evals.len(), "kappa mask values must fit the new variable (kappa <= 2^ell)");
+
+	let n = hypercube_evals.len();
+	let mut out = vec![F::ZERO; n * 2]; // ell -> ell+1, new variable most significant
+	out[..n].copy_from_slice(hypercube_evals); // G(x, 0) = g(x)
+	fill(&mut out[n..n + kappa]); // G(x, 1) = random mask on kappa points
+	out
+}
+
 #[cfg(test)]
 mod tests {
 	use binius_field::{BinaryField16b, Field};
 	use rand::{rngs::StdRng, SeedableRng};
 
-	use super::{combine_masked, pad_message_high, sample_mask_poly};
+	use super::{combine_masked, extend_multilinear_zk, pad_message_high, sample_mask_poly};
 
 	fn rand_vec(rng: &mut StdRng, n: usize) -> Vec<BinaryField16b> {
 		(0..n).map(|_| <BinaryField16b as Field>::random(&mut *rng)).collect()
@@ -140,6 +167,54 @@ mod tests {
 		// why FRI proximity on alpha*f + f' certifies both f and f' at once.
 		let sum = |v: &[BinaryField16b]| v.iter().copied().fold(BinaryField16b::ZERO, |a, b| a + b);
 		assert_eq!(sum(&combined), alpha * sum(&f) + sum(&f_prime));
+	}
+
+	#[test]
+	fn extend_multilinear_preserves_evaluation_on_the_hypercube() {
+		use binius_field::BinaryField128b;
+		use binius_math::{MultilinearExtension, MultilinearQuery};
+
+		type F = BinaryField128b;
+		let mut rng = StdRng::seed_from_u64(0xBA5E_F01D);
+		let ell = 6usize;
+		let n = 1usize << ell;
+		let kappa = 12usize; // e.g. the FRI query count
+
+		// Original committed multilinear g on `ell` variables (hypercube evaluations).
+		let g_evals: Vec<F> = (0..n).map(|_| <F as Field>::random(&mut rng)).collect();
+
+		// Zero-knowledge extension G on `ell+1` variables: low half = g, high half = kappa masks.
+		let g_ext = extend_multilinear_zk(&g_evals, kappa, |buf| {
+			for c in buf.iter_mut() {
+				*c = <F as Field>::random(&mut rng);
+			}
+		});
+		assert_eq!(g_ext.len(), 2 * n);
+
+		let g = MultilinearExtension::from_values(g_evals.clone()).unwrap();
+		let g_big = MultilinearExtension::from_values(g_ext.clone()).unwrap();
+		let mask = MultilinearExtension::from_values(g_ext[n..].to_vec()).unwrap();
+
+		// A random evaluation point z in the original ell variables.
+		let z: Vec<F> = (0..ell).map(|_| <F as Field>::random(&mut rng)).collect();
+
+		let eval_g = g.evaluate(MultilinearQuery::<F>::expand(&z).to_ref()).unwrap();
+
+		// THE invariant: evaluating the extension at (z, new_var = 0) reproduces g(z) exactly —
+		// the evaluation the PCS proves is untouched by the zero-knowledge padding.
+		let mut z0 = z.clone();
+		z0.push(F::ZERO);
+		let eval_ext_0: F = g_big.evaluate(MultilinearQuery::<F>::expand(&z0).to_ref()).unwrap();
+		assert_eq!(eval_ext_0, eval_g, "padding must preserve the hypercube evaluation");
+
+		// And at (z, new_var = 1) the extension is exactly the mask multilinear — the live
+		// randomness that hides the FRI query domain. (Exact identity, not probabilistic.)
+		let mut z1 = z.clone();
+		z1.push(F::ONE);
+		let eval_ext_1: F = g_big.evaluate(MultilinearQuery::<F>::expand(&z1).to_ref()).unwrap();
+		let eval_mask = mask.evaluate(MultilinearQuery::<F>::expand(&z).to_ref()).unwrap();
+		assert_eq!(eval_ext_1, eval_mask, "the new-variable=1 slice is exactly the mask");
+		assert_ne!(eval_ext_1, eval_g, "the mask slice is live (differs from g)");
 	}
 
 	#[test]

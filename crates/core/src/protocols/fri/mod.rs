@@ -35,4 +35,4 @@ pub use common::{calculate_n_test_queries, estimate_optimal_arity, FRIParams, Te
 pub use error::*;
 pub use prove::*;
 pub use verify::*;
-pub use zk::{combine_masked, pad_message_high, sample_mask_poly};
+pub use zk::{combine_masked, extend_multilinear_zk, pad_message_high, sample_mask_poly};

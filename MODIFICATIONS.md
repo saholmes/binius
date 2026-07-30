@@ -74,8 +74,18 @@ Binius's own test suite passes (`binius_core` 138/138, `binius_m3` unit tests).
     runs on. F-linearity of RS encoding makes coefficient-domain combination identical
     to codeword combination; proximity on `alpha·f + f'` certifies both `f` and `f'`
     are low-degree while the random `f'` hides `f` at the opened points.
+  - `extend_multilinear_zk` — the evaluation-domain (BaseFold) view of technique-1
+    padding: takes the `2^ell` hypercube evaluations of the committed multilinear `g`
+    and returns the `2^{ell+1}` evaluations of the extension `G` (new variable most
+    significant) with `G(x,0)=g(x)` and `kappa` random masks in the `G(x,1)` slice. The
+    accompanying test drives binius_math's own `MultilinearExtension` evaluator to
+    confirm the load-bearing invariant — `G(z,0)=g(z)` for every proven point while the
+    `=1` slice is exactly the live mask — so the padding is validated through the real
+    evaluation layer, not a stand-in.
   Opt-in; the default (non-hiding) FRI commitment path is untouched. The remaining A2
-  step is wiring these through the BaseFold evaluation sumcheck.
+  step is threading these helpers through the interleaved sumcheck-FRI prover/verifier
+  in `crates/core/src/piop/{prove,verify}.rs` (message dimensioning + the final
+  consistency check) for a full zero-knowledge `commit`/`prove`/`verify`.
 
 - `crates/core/src/protocols/fri/mod.rs`
   Register `mod zk;` and re-export `pad_message_high`, `sample_mask_poly`,
