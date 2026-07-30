@@ -63,16 +63,23 @@ Binius's own test suite passes (`binius_core` 138/138, `binius_m3` unit tests).
 
 - `crates/core/src/protocols/fri/zk.rs` (new file)
   A2 of the zero-knowledge roadmap (port of Diamond, IACR ePrint 2025/1015,
-  Construction 4.1): `pad_message_high`, technique-1 "high-end padding" — lay out the
-  committed coefficient vector as `[message ‖ kappa random ‖ zeros]` over the doubled
-  `ell -> ell+1` novel-basis domain, so `Z_H(X)·r(X)` randomises the FRI query domain
-  while leaving the multilinear evaluation on `H` unchanged. Opt-in; the default
-  (non-hiding) FRI commitment path is untouched. Technique-2 (second random polynomial
-  + `alpha·f + f'` combination) and the BaseFold-evaluation wiring are the remaining
-  A2 steps.
+  Construction 4.1). Two opt-in coefficient-domain helpers:
+  - `pad_message_high` — technique-1 "high-end padding": lay out the committed
+    coefficient vector as `[message ‖ kappa random ‖ zeros]` over the doubled
+    `ell -> ell+1` novel-basis domain, so `Z_H(X)·r(X)` randomises the FRI query
+    domain while leaving the multilinear evaluation on `H` unchanged.
+  - `sample_mask_poly` + `combine_masked` — technique-2 second-random-polynomial
+    combination: sample a fully-random `f'` of the padded length and form the virtual
+    `alpha·f + f'` (α a large-field verifier challenge) that the FRI low-degree test
+    runs on. F-linearity of RS encoding makes coefficient-domain combination identical
+    to codeword combination; proximity on `alpha·f + f'` certifies both `f` and `f'`
+    are low-degree while the random `f'` hides `f` at the opened points.
+  Opt-in; the default (non-hiding) FRI commitment path is untouched. The remaining A2
+  step is wiring these through the BaseFold evaluation sumcheck.
 
 - `crates/core/src/protocols/fri/mod.rs`
-  Register `mod zk;` and re-export `pad_message_high`.
+  Register `mod zk;` and re-export `pad_message_high`, `sample_mask_poly`,
+  `combine_masked`.
 
 All other files are unmodified from upstream. This derivative work continues to be
 licensed under the Apache License, Version 2.0.

@@ -15,15 +15,24 @@
 //      PCS proves — are unchanged, while the disjoint Reed–Solomon domain that FRI queries is
 //      randomised. `kappa = gamma · 2^vartheta` is the number of points each FRI oracle opens.
 //
-//   2. Second random polynomial + combination (NOT in this file; next step). High padding alone is
-//      insufficient because FRI folding shrinks the domain while the query count stays fixed; the
-//      remedy (Aurora §5.1) is to sample a second fully-random polynomial f′ and run FRI on the
-//      virtual combination α·f + f′ (α a verifier challenge). This, plus wiring the padding through
-//      the BaseFold *evaluation* sumcheck so the transparency-to-evaluation is realised end to end,
-//      is the remaining A2 work (see paper/zk-a2-port-plan.md in the consumer repo).
+//   2. Second random polynomial + combination (this file). High padding alone is insufficient
+//      because FRI folding shrinks the domain while the query count stays fixed; the remedy
+//      (Aurora §5.1) is to sample a second *fully-random* polynomial f′ (same length as the padded
+//      f) and run the FRI low-degree test on the virtual combination α·f + f′, where α is a verifier
+//      challenge drawn from the large tower field L. Because RS encoding is F-linear, forming the
+//      combination on coefficient vectors and encoding is identical to combining codewords, so we
+//      combine on coefficients here. The FRI proximity on α·f + f′ certifies both f and f′ are
+//      low-degree (Schwartz–Zippel over α: a non-low-degree f survives only with probability
+//      1/|L| = 2^{-field_bits}), while the queried values reveal nothing about f because the
+//      independent random f′ masks every opened point — this is the zero-knowledge of the query
+//      phase. The `field_bits` term of `κ_ZK` (see the consumer repo's zk_accounting) is exactly
+//      this α combination space.
 //
-// This file contributes technique 1's coefficient-vector layout as a reusable, opt-in helper. It
-// changes no existing code path; the default (non-hiding) commitment is untouched.
+// This file contributes techniques 1 and 2 as reusable, opt-in coefficient-domain helpers. The only
+// remaining A2 step is wiring these through the BaseFold *evaluation* sumcheck so the
+// transparency-to-evaluation is realised end to end (see paper/zk-a2-port-plan.md in the consumer
+// repo). Neither helper changes an existing code path; the default (non-hiding) commitment is
+// untouched.
 
 use binius_field::Field;
 
@@ -48,12 +57,38 @@ pub fn pad_message_high<F: Field>(message: &[F], kappa: usize, mut fill: impl Fn
 	out
 }
 
+/// Sample the second, fully-random masking polynomial `f′` for technique 2. It has the same length
+/// as the (padded) committed polynomial `f`; `fill` writes every coefficient from a source of
+/// randomness (the helper carries no RNG dependency). Unlike the high-end padding of technique 1,
+/// `f′` is random in *all* coordinates — it is not constrained to vanish on the fundamental domain,
+/// because it only participates in the low-degree test, never in the evaluation claim.
+pub fn sample_mask_poly<F: Field>(len: usize, mut fill: impl FnMut(&mut [F])) -> Vec<F> {
+	let mut out = vec![F::ZERO; len];
+	fill(&mut out);
+	out
+}
+
+/// Technique-2 combination: the virtual coefficient vector `α·f + f′` that the FRI low-degree test
+/// is run on. `f` is the high-end-padded committed polynomial (technique 1), `f_prime` the
+/// independent random masking polynomial ([`sample_mask_poly`]), and `alpha` a verifier challenge
+/// from the large tower field. By F-linearity of Reed–Solomon encoding, combining on coefficients
+/// and then encoding equals combining the codewords, so FRI proximity on this vector certifies both
+/// `f` and `f_prime` are low-degree while the random `f_prime` hides `f` at the opened points.
+pub fn combine_masked<F: Field>(f: &[F], f_prime: &[F], alpha: F) -> Vec<F> {
+	assert_eq!(f.len(), f_prime.len(), "f and f' must share the padded length");
+	f.iter().zip(f_prime).map(|(&fi, &gi)| alpha * fi + gi).collect()
+}
+
 #[cfg(test)]
 mod tests {
 	use binius_field::{BinaryField16b, Field};
 	use rand::{rngs::StdRng, SeedableRng};
 
-	use super::pad_message_high;
+	use super::{combine_masked, pad_message_high, sample_mask_poly};
+
+	fn rand_vec(rng: &mut StdRng, n: usize) -> Vec<BinaryField16b> {
+		(0..n).map(|_| <BinaryField16b as Field>::random(&mut *rng)).collect()
+	}
 
 	#[test]
 	fn high_end_padding_preserves_low_and_randomises_high() {
@@ -76,5 +111,48 @@ mod tests {
 		// The next `kappa` coefficients are the random padding; the remainder is zero.
 		assert!(padded[n..n + kappa].iter().any(|&c| c != BinaryField16b::ZERO), "padding must be random");
 		assert!(padded[n + kappa..].iter().all(|&c| c == BinaryField16b::ZERO), "beyond the padding must be zero");
+	}
+
+	#[test]
+	fn combine_masked_matches_elementwise_and_is_linear() {
+		let mut rng = StdRng::seed_from_u64(0xC0FFEE);
+		let len = 32usize;
+		let f = rand_vec(&mut rng, len);
+		let f_prime = sample_mask_poly(len, |buf| {
+			for c in buf.iter_mut() {
+				*c = <BinaryField16b as Field>::random(&mut rng);
+			}
+		});
+		let alpha = <BinaryField16b as Field>::random(&mut rng);
+
+		let combined = combine_masked(&f, &f_prime, alpha);
+		assert_eq!(combined.len(), len);
+
+		// Elementwise identity: combined[i] == alpha*f[i] + f'[i].
+		for i in 0..len {
+			assert_eq!(combined[i], alpha * f[i] + f_prime[i]);
+			// Mask is recoverable without a field inverse: combined - f' == alpha*f
+			// (subtraction is addition in characteristic 2). This is the simulator's handle.
+			assert_eq!(combined[i] + f_prime[i], alpha * f[i]);
+		}
+
+		// The combination commutes with any linear functional (here, the coefficient sum), which is
+		// why FRI proximity on alpha*f + f' certifies both f and f' at once.
+		let sum = |v: &[BinaryField16b]| v.iter().copied().fold(BinaryField16b::ZERO, |a, b| a + b);
+		assert_eq!(sum(&combined), alpha * sum(&f) + sum(&f_prime));
+	}
+
+	#[test]
+	fn combine_masked_degenerate_challenges() {
+		let mut rng = StdRng::seed_from_u64(0xD00D);
+		let len = 16usize;
+		let f = rand_vec(&mut rng, len);
+		let f_prime = rand_vec(&mut rng, len);
+
+		// alpha = 0 -> pure mask f' (reveals nothing about f).
+		assert_eq!(combine_masked(&f, &f_prime, BinaryField16b::ZERO), f_prime);
+		// alpha = 1, f' = 0 -> exactly f.
+		let zeros = vec![BinaryField16b::ZERO; len];
+		assert_eq!(combine_masked(&f, &zeros, BinaryField16b::ONE), f);
 	}
 }
