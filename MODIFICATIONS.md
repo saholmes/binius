@@ -114,5 +114,21 @@ Binius's own test suite passes (`binius_core` 138/138, `binius_m3` unit tests).
   Register `mod zk;` and re-export `augment_commit_meta_with_mask`, `mask_multilinear`,
   `mask_n_vars`.
 
+- `crates/core/src/protocols/fri/zk_pcs.rs` (new file)
+  A2 final query-phase piece (technique 2 of Construction 4.1): `prove_combination` /
+  `verify_combination`, a two-tree FRI prover/verifier that runs the low-degree test on
+  the virtual combination `alpha*f + f'`. `f` (the technique-1-padded witness codeword)
+  and `f'` (fresh random) are committed in separate Merkle trees whose roots are bound
+  into the transcript BEFORE `alpha` is sampled; `f'` keeps the folded intermediate
+  codewords hiding as the FRI domain shrinks. The design reuses the vetted, unchanged
+  `FRIFolder`/`FRIVerifier` on the combined codeword (a linear combination of two
+  codewords is itself a codeword — no re-encode) and adds a per-query cross-check that
+  the combined coset equals `alpha*f_coset + f'_coset` against the two pre-alpha trees,
+  binding `alpha` to the pre-commitments. Tests: honest round-trip verifies; an
+  adversarial wrong-`alpha` proof is rejected. Opt-in; changes no existing code path.
+
+- `crates/core/src/protocols/fri/mod.rs`
+  Register `mod zk_pcs;` and re-export `prove_combination`, `verify_combination`.
+
 All other files are unmodified from upstream. This derivative work continues to be
 licensed under the Apache License, Version 2.0.
