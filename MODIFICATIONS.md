@@ -51,5 +51,15 @@ Binius's own test suite passes (`binius_core` 138/138, `binius_m3` unit tests).
 - `crates/core/src/merkle_tree/mod.rs`
   Register `mod hiding;` and re-export `salt_leaves` / `leaf_values`.
 
+- `crates/m3/src/gadgets/masking.rs` (new file)
+  A4 of the zero-knowledge roadmap: `MaskColumns`, an opt-in gadget that adds N
+  committed, unconstrained masking columns to a table and fills them with fresh
+  randomness (via a caller-supplied fill closure, so the gadget carries no RNG
+  dependency). The randomness layer for a masked commitment / zero-knowledge
+  sumcheck. Existing gadgets/tables are unaffected.
+
+- `crates/m3/src/gadgets/mod.rs`
+  Register `pub mod masking;`.
+
 All other files are unmodified from upstream. This derivative work continues to be
 licensed under the Apache License, Version 2.0.
