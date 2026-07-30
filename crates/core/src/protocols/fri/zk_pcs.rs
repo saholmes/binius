@@ -423,6 +423,145 @@ mod tests {
 		.expect("honest two-tree combination proof must verify");
 	}
 
+	/// Technique-2 overhead: the two-tree `alpha*f + f'` combination vs a standard single-codeword
+	/// FRI at identical parameters. Reports prover time, verifier time, and proof size. Run with:
+	///   cargo test -p binius_core --release --lib fri::zk_pcs::tests::technique2_overhead -- --nocapture --include-ignored
+	#[test]
+	#[ignore = "measurement; run explicitly with --release --include-ignored --nocapture"]
+	fn technique2_overhead() {
+		use std::time::Instant;
+
+		use crate::protocols::fri::{FRIFolder, FRIVerifier, FoldRoundOutput};
+
+		// FA = BinaryField16b caps log_len (= log_dim + log_inv_rate) at 16.
+		let log_dimension = 14;
+		let log_inv_rate = 2;
+		let log_batch_size = 0;
+		let arities = [4usize, 4, 4];
+		let n_test_queries = 32;
+		let reps = 5;
+
+		let merkle_prover =
+			BinaryMerkleTreeProver::<_, Groestl256, _>::new(Groestl256ByteCompression);
+		let rs_code = ReedSolomonCode::<FA>::new(log_dimension, log_inv_rate).unwrap();
+		let params =
+			FRIParams::new(rs_code, log_batch_size, arities.to_vec(), n_test_queries).unwrap();
+		let rs_code = ReedSolomonCode::<FA>::new(log_dimension, log_inv_rate).unwrap();
+		let ntt = SingleThreadedNTT::new(params.rs_code().log_len()).unwrap();
+
+		let mut rng = StdRng::seed_from_u64(7);
+		let msg_len = rs_code.dim() << log_batch_size >> P::LOG_WIDTH;
+		let msg_f: Vec<P> = repeat_with(|| P::random(&mut rng)).take(msg_len).collect();
+		let msg_fprime: Vec<P> = repeat_with(|| P::random(&mut rng)).take(msg_len).collect();
+
+		let commit = |m: &[P]| {
+			let CommitOutput { commitment, committed, codeword } =
+				fri::commit_interleaved(&rs_code, &params, &ntt, &merkle_prover, m).unwrap();
+			(commitment, committed, codeword)
+		};
+
+		// Baseline: standard single-codeword FRI prove.
+		let single_prove = || {
+			let (root_f, committed_f, codeword_f) = commit(&msg_f);
+			let mut tr = ProverTranscript::<HasherChallenger<Groestl256>>::new();
+			tr.message().write(&root_f);
+			let mut folder =
+				FRIFolder::new(&params, &ntt, &merkle_prover, &codeword_f, &committed_f).unwrap();
+			for _ in 0..params.n_fold_rounds() {
+				let c = tr.sample();
+				if let FoldRoundOutput::Commitment(rc) = folder.execute_fold_round(c).unwrap() {
+					tr.message().write(&rc);
+				}
+			}
+			folder.finish_proof(&mut tr).unwrap();
+			tr
+		};
+
+		// ZK: two-tree combination prove.
+		let combo_prove = || {
+			let (root_f, committed_f, codeword_f) = commit(&msg_f);
+			let (root_fprime, committed_fprime, codeword_fprime) = commit(&msg_fprime);
+			let mut tr = ProverTranscript::<HasherChallenger<Groestl256>>::new();
+			tr.message().write(&root_f);
+			tr.message().write(&root_fprime);
+			let alpha: F = tr.sample();
+			prove_combination(
+				&params, &ntt, &merkle_prover, &codeword_f, &committed_f, &codeword_fprime,
+				&committed_fprime, alpha, &mut tr,
+			)
+			.unwrap();
+			tr
+		};
+
+		let median = |mut v: Vec<f64>| {
+			v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+			v[v.len() / 2]
+		};
+
+		// Prover timing + proof size.
+		let mut base_p = Vec::new();
+		let mut combo_p = Vec::new();
+		let (mut base_bytes, mut combo_bytes) = (0usize, 0usize);
+		for _ in 0..reps {
+			let t = Instant::now();
+			let tr = single_prove();
+			base_p.push(t.elapsed().as_secs_f64() * 1e3);
+			base_bytes = tr.finalize().len();
+
+			let t = Instant::now();
+			let tr = combo_prove();
+			combo_p.push(t.elapsed().as_secs_f64() * 1e3);
+			combo_bytes = tr.finalize().len();
+		}
+
+		// Verifier timing (build fresh proofs, then time verify only).
+		let mut base_v = Vec::new();
+		let mut combo_v = Vec::new();
+		for _ in 0..reps {
+			let mut vt = single_prove().into_verifier();
+			let t = Instant::now();
+			{
+				let root = vt.message().read().unwrap();
+				let mut challenges: Vec<F> = Vec::new();
+				let mut round_commitments = Vec::new();
+				for &arity in params.fold_arities().iter().take(params.n_oracles()) {
+					let rc: Vec<F> = vt.sample_vec(arity);
+					challenges.extend(rc);
+					round_commitments.push(vt.message().read().unwrap());
+				}
+				let fc: Vec<F> = vt.sample_vec(params.n_final_challenges());
+				challenges.extend(fc);
+				let verifier = FRIVerifier::new(
+					&params, merkle_prover.scheme(), &root, &round_commitments, &challenges,
+				)
+				.unwrap();
+				verifier.verify(&mut vt).unwrap();
+			}
+			base_v.push(t.elapsed().as_secs_f64() * 1e3);
+
+			let mut vt = combo_prove().into_verifier();
+			let t = Instant::now();
+			{
+				let root_f = vt.message().read().unwrap();
+				let root_fprime = vt.message().read().unwrap();
+				let alpha: F = vt.sample();
+				verify_combination(&params, merkle_prover.scheme(), &root_f, &root_fprime, alpha, &mut vt)
+					.unwrap();
+			}
+			combo_v.push(t.elapsed().as_secs_f64() * 1e3);
+		}
+
+		let (bp, cp) = (median(base_p), median(combo_p));
+		let (bv, cv) = (median(base_v), median(combo_v));
+		println!(
+			"\nTechnique-2 (two-tree alpha*f+f') overhead vs single-codeword FRI (log_dim={log_dimension}, rate=1/{}, {n_test_queries} queries, median of {reps}):",
+			1 << log_inv_rate
+		);
+		println!("  prove:  {bp:8.2} ms -> {cp:8.2} ms  ({:.2}x)", cp / bp);
+		println!("  verify: {bv:8.2} ms -> {cv:8.2} ms  ({:.2}x)", cv / bv);
+		println!("  proof:  {base_bytes:8} B  -> {combo_bytes:8} B   ({:.2}x)\n", combo_bytes as f64 / base_bytes as f64);
+	}
+
 	#[test]
 	fn wrong_alpha_is_rejected() {
 		// The prover committed f, f' and combined = alpha*f + f'. A verifier using alpha' != alpha
