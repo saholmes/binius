@@ -89,7 +89,26 @@ Binius's own test suite passes (`binius_core` 138/138, `binius_m3` unit tests).
 
 - `crates/core/src/protocols/fri/mod.rs`
   Register `mod zk;` and re-export `pad_message_high`, `sample_mask_poly`,
-  `combine_masked`.
+  `combine_masked`, `extend_multilinear_zk`.
+
+- `crates/core/src/piop/zk.rs` (new file)
+  A2 protocol-level wiring into the FRI-Binius PCS compiler (`crate::piop`):
+  `mask_multilinear`, `mask_n_vars`, `augment_commit_meta_with_mask`. The prover
+  appends a freshly-sampled masking multilinear to the committed batch, in its own
+  largest-variable bucket. Because that bucket carries no sumcheck claim it is an
+  unconstrained committed column — a shape the existing `prove`/`verify` already
+  support — so this needs NO change to `prove`, `verify`, `FRIParams`, or the verifier
+  consistency check. The mask enters the merged FRI message, so the commitment and
+  codeword are randomised (commitment hiding). The tests run the full
+  commit/prove/verify end-to-end and check that independent masks yield unlinkable
+  commitments while every real opening still verifies. Scope: this is *commitment*
+  hiding (the A4 masking-column technique at PCS scope); opened-value zero-knowledge in
+  the FRI query phase (high-end padding + `alpha*f + f'` combination threaded through
+  the query/consistency path) remains the final A2 step and is not claimed here.
+
+- `crates/core/src/piop/mod.rs`
+  Register `mod zk;` and re-export `augment_commit_meta_with_mask`, `mask_multilinear`,
+  `mask_n_vars`.
 
 All other files are unmodified from upstream. This derivative work continues to be
 licensed under the Apache License, Version 2.0.
