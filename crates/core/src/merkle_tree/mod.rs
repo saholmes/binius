@@ -2,6 +2,7 @@
 
 mod binary_merkle_tree;
 mod errors;
+mod hiding;
 #[allow(clippy::module_inception)]
 mod merkle_tree_vcs;
 mod prover;
@@ -10,6 +11,7 @@ mod scheme;
 mod tests;
 
 pub use binary_merkle_tree::*;
+pub use hiding::{leaf_values, salt_leaves};
 pub use merkle_tree_vcs::*;
 pub use prover::BinaryMerkleTreeProver;
 pub use scheme::BinaryMerkleTreeScheme;

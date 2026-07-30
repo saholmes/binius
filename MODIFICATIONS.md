@@ -41,5 +41,15 @@ Binius's own test suite passes (`binius_core` 138/138, `binius_m3` unit tests).
   `add_constant` builds its transparent constant polynomial over the top field's
   own underlier rather than a hardcoded 128-bit underlier.
 
+- `crates/core/src/merkle_tree/hiding.rs` (new file)
+  A1 of the zero-knowledge roadmap: an opt-in **hiding (salted) binary Merkle
+  commitment** layered over the unmodified `BinaryMerkleTreeProver`. Appends a
+  per-leaf salt as extra committed field elements so the leaf digest
+  `H(real ‖ salt)` is hiding, with no change to the Merkle scheme; the salt is
+  revealed as part of the opened values. The default non-hiding path is untouched.
+
+- `crates/core/src/merkle_tree/mod.rs`
+  Register `mod hiding;` and re-export `salt_leaves` / `leaf_values`.
+
 All other files are unmodified from upstream. This derivative work continues to be
 licensed under the Apache License, Version 2.0.
