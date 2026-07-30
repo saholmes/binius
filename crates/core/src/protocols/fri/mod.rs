@@ -29,8 +29,10 @@ mod prove;
 #[cfg(test)]
 mod tests;
 mod verify;
+mod zk;
 
 pub use common::{calculate_n_test_queries, estimate_optimal_arity, FRIParams, TerminateCodeword};
 pub use error::*;
 pub use prove::*;
 pub use verify::*;
+pub use zk::pad_message_high;

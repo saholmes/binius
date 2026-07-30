@@ -61,5 +61,18 @@ Binius's own test suite passes (`binius_core` 138/138, `binius_m3` unit tests).
 - `crates/m3/src/gadgets/mod.rs`
   Register `pub mod masking;`.
 
+- `crates/core/src/protocols/fri/zk.rs` (new file)
+  A2 of the zero-knowledge roadmap (port of Diamond, IACR ePrint 2025/1015,
+  Construction 4.1): `pad_message_high`, technique-1 "high-end padding" — lay out the
+  committed coefficient vector as `[message ‖ kappa random ‖ zeros]` over the doubled
+  `ell -> ell+1` novel-basis domain, so `Z_H(X)·r(X)` randomises the FRI query domain
+  while leaving the multilinear evaluation on `H` unchanged. Opt-in; the default
+  (non-hiding) FRI commitment path is untouched. Technique-2 (second random polynomial
+  + `alpha·f + f'` combination) and the BaseFold-evaluation wiring are the remaining
+  A2 steps.
+
+- `crates/core/src/protocols/fri/mod.rs`
+  Register `mod zk;` and re-export `pad_message_high`.
+
 All other files are unmodified from upstream. This derivative work continues to be
 licensed under the Apache License, Version 2.0.
