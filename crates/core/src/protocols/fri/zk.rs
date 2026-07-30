@@ -218,6 +218,51 @@ mod tests {
 	}
 
 	#[test]
+	fn fri_fold_is_linear_so_the_alpha_combination_opens_from_two_trees() {
+		// Technique 2 runs the FRI low-degree test on the virtual combination alpha*f + f', with f
+		// and f' committed in separate Merkle trees and alpha sampled after both commitments. For the
+		// verifier to open f and f' separately and reconstruct (alpha*f + f') at the query positions,
+		// the FRI fold map must be F-linear in the codeword. This checks that invariant against the
+		// REAL binius `fold_codeword`, so the two-tree opening is sound by construction.
+		use binius_field::{BinaryField128b, BinaryField16b, Field};
+		use binius_ntt::SingleThreadedNTT;
+
+		use crate::{protocols::fri::fold_codeword, reed_solomon::reed_solomon::ReedSolomonCode};
+
+		type F = BinaryField128b; // large tower field the codeword lives in
+		type FS = BinaryField16b; // Reed–Solomon encoding subfield
+
+		let mut rng = StdRng::seed_from_u64(0xF01D_11);
+		let log_dim = 8usize;
+		let log_inv_rate = 1usize;
+		let rs_code = ReedSolomonCode::<FS>::new(log_dim, log_inv_rate).unwrap();
+		let ntt = SingleThreadedNTT::<FS>::new(rs_code.log_len()).unwrap();
+
+		let len = 1usize << rs_code.log_len(); // codeword length
+		let c_f: Vec<F> = (0..len).map(|_| <F as Field>::random(&mut rng)).collect();
+		let c_fprime: Vec<F> = (0..len).map(|_| <F as Field>::random(&mut rng)).collect();
+		let alpha = <F as Field>::random(&mut rng);
+
+		// The virtual combined codeword the low-degree test is actually run on.
+		let c_combined = combine_masked(&c_f, &c_fprime, alpha);
+
+		// Fold all three with the same challenges via the real FRI fold primitive.
+		let n_fold = 3usize;
+		let challenges: Vec<F> = (0..n_fold).map(|_| <F as Field>::random(&mut rng)).collect();
+		let fold = |cw: &[F]| fold_codeword(&ntt, &rs_code, cw, n_fold, &challenges);
+
+		let folded_combined = fold(&c_combined);
+		let folded_f = fold(&c_f);
+		let folded_fprime = fold(&c_fprime);
+
+		// fold(alpha*f + f') == alpha*fold(f) + fold(f'): folding a combination equals combining the
+		// folds, so a verifier holding the per-tree openings can reconstruct the combined fold.
+		let recombined = combine_masked(&folded_f, &folded_fprime, alpha);
+		assert_eq!(folded_combined, recombined, "FRI fold must be linear in the codeword");
+		assert_eq!(folded_combined.len(), len >> n_fold);
+	}
+
+	#[test]
 	fn combine_masked_degenerate_challenges() {
 		let mut rng = StdRng::seed_from_u64(0xD00D);
 		let len = 16usize;

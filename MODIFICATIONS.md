@@ -82,6 +82,10 @@ Binius's own test suite passes (`binius_core` 138/138, `binius_m3` unit tests).
     confirm the load-bearing invariant — `G(z,0)=g(z)` for every proven point while the
     `=1` slice is exactly the live mask — so the padding is validated through the real
     evaluation layer, not a stand-in.
+  A further test (`fri_fold_is_linear_...`) validates technique-2's enabling invariant
+  against the real `fold_codeword`: `fold(alpha*f + f') = alpha*fold(f) + fold(f')`, so
+  a verifier can open the separately-committed `f` and `f'` trees and reconstruct the
+  combined fold at the query positions — the soundness basis for the two-tree opening.
   Opt-in; the default (non-hiding) FRI commitment path is untouched. The remaining A2
   step is threading these helpers through the interleaved sumcheck-FRI prover/verifier
   in `crates/core/src/piop/{prove,verify}.rs` (message dimensioning + the final
