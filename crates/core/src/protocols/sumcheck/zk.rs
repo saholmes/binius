@@ -72,6 +72,50 @@ where
 	}
 }
 
+/// The Libra-masked **zero-check** composition for a Boolean-constraint column: `(w, g) -> w^2 + w +
+/// rho*g`. In characteristic 2, `w^2 + w = w(w+1)` vanishes exactly when `w in {0,1}`, so for a bit
+/// witness the constraint part sums to zero over the hypercube and a sumcheck with this composition
+/// proves that Boolean constraint with claimed sum `rho*s` (`s = sum_H g`). The random mask `g`
+/// hides the round polynomials, which would otherwise reveal the low-degree extension of `w` at the
+/// challenge points. This is the shape the AIR constraint zerocheck reduces to (an eq-indicator times
+/// a constraint composition); masking it is the zero-knowledge zerocheck that composes with A1/A2.
+#[derive(Debug, Clone)]
+pub struct MaskedZerocheck<F> {
+	pub rho: F,
+}
+
+impl<F: Field> MaskedZerocheck<F> {
+	pub const fn new(rho: F) -> Self {
+		Self { rho }
+	}
+}
+
+impl<P: PackedField> CompositionPoly<P> for MaskedZerocheck<P::Scalar>
+where
+	P::Scalar: TowerField,
+{
+	fn n_vars(&self) -> usize {
+		2
+	}
+
+	fn degree(&self) -> usize {
+		2
+	}
+
+	fn expression(&self) -> ArithExpr<P::Scalar> {
+		// w^2 + w + rho*g  (subtraction is addition in characteristic 2).
+		ArithExpr::Var(0).pow(2) + ArithExpr::Var(0) + ArithExpr::Const(self.rho) * ArithExpr::Var(1)
+	}
+
+	fn evaluate(&self, query: &[P]) -> Result<P, binius_math::Error> {
+		Ok(query[0] * query[0] + query[0] + P::broadcast(self.rho) * query[1])
+	}
+
+	fn binary_tower_level(&self) -> usize {
+		<P::Scalar as TowerField>::TOWER_LEVEL
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use binius_field::{
@@ -193,5 +237,84 @@ mod tests {
 		// Correctness of the ZK wrapper: the public data (combined_sum, s, rho) recovers the base
 		// sum v = combined_sum - rho*s, without v ever being sent in the clear.
 		assert_eq!(combined_sum - rho * s, v, "base sum recoverable from the masked claim");
+	}
+
+	#[test]
+	fn zk_zerocheck_masks_a_boolean_constraint() {
+		use binius_field::packed::set_packed_slice;
+		use rand::Rng;
+
+		use super::MaskedZerocheck;
+
+		let n_vars = 8;
+		let n = 1usize << n_vars;
+		let mut rng = StdRng::seed_from_u64(7);
+
+		// Bit witness w: hypercube values in {0,1}, so the Boolean constraint w^2 + w vanishes on the
+		// hypercube. (A masked *zerocheck*: the constraint part sums to zero.)
+		let mut w_evals = vec![P::default(); n >> P::LOG_WIDTH];
+		for i in 0..n {
+			set_packed_slice(&mut w_evals, i, if rng.gen::<bool>() { F::ONE } else { F::ZERO });
+		}
+		let w = MultilinearExtension::<P>::new(n_vars, w_evals).unwrap();
+
+		// Fresh random mask g; reveal only its sum s.
+		let g = MultilinearExtension::<P>::new(
+			n_vars,
+			std::iter::repeat_with(|| P::random(&mut rng)).take(n >> P::LOG_WIDTH).collect(),
+		)
+		.unwrap();
+		let s = hypercube_sum(&g);
+
+		let mut prover_transcript = ProverTranscript::<HasherChallenger<Groestl256>>::new();
+		prover_transcript.message().write_scalar(s);
+		let rho: F = prover_transcript.sample();
+
+		let comp = MaskedZerocheck::new(rho);
+		let claimed = rho * s; // constraint part sums to 0 for a bit column
+
+		let backend = make_portable_backend();
+		let domain_factory = IsomorphicEvaluationDomainFactory::<FDomain>::default();
+		let multilins = [w.clone(), g.clone()].map(MLEEmbeddingAdapter::<_, P, _>::from).to_vec();
+
+		let prover = RegularSumcheckProver::<FDomain, _, _, _, _>::new(
+			EvaluationOrder::HighToLow,
+			multilins.iter().collect(),
+			[CompositeSumClaim { composition: &comp, sum: claimed }],
+			domain_factory,
+			|_| 0,
+			&backend,
+		)
+		.unwrap();
+		let prover_reduced =
+			batch_prove(vec![prover], &mut prover_transcript).expect("zk zerocheck prove");
+
+		let prover_sample = CanSample::<F>::sample(&mut prover_transcript);
+		let mut verifier_transcript = prover_transcript.into_verifier();
+		let s_v: F = verifier_transcript.message().read_scalar().unwrap();
+		let rho_v: F = verifier_transcript.sample();
+		let comp_v = MaskedZerocheck::new(rho_v);
+		let claim = SumcheckClaim::new(
+			n_vars,
+			2,
+			vec![CompositeSumClaim { composition: &comp_v, sum: rho_v * s_v }],
+		)
+		.unwrap();
+		let verifier_reduced =
+			batch_verify(EvaluationOrder::HighToLow, &[claim], &mut verifier_transcript).unwrap();
+
+		assert_eq!(prover_sample, CanSample::<F>::sample(&mut verifier_transcript));
+		verifier_transcript.finalize().unwrap();
+		assert_eq!(verifier_reduced, prover_reduced);
+
+		// The reduced claim pins w(r), g(r) and w^2(r)+w(r)+rho*g(r) — the masked zerocheck soundly
+		// reduces the Boolean constraint while never revealing w's own round polynomials.
+		let BatchSumcheckOutput { challenges, multilinear_evals } = verifier_reduced;
+		let query = backend.multilinear_query::<F>(&challenges).unwrap();
+		let w_r = w.evaluate(query.to_ref()).unwrap();
+		let g_r = g.evaluate(query.to_ref()).unwrap();
+		assert_eq!(multilinear_evals[0][0], w_r);
+		assert_eq!(multilinear_evals[0][1], g_r);
+		assert_eq!(comp_v.evaluate(&[w_r, g_r]).unwrap(), w_r * w_r + w_r + rho * g_r);
 	}
 }

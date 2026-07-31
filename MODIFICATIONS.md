@@ -149,8 +149,13 @@ Binius's own test suite passes (`binius_core` 138/138, `binius_m3` unit tests).
   `f + rho*g` and are masked by `g`. The test drives binius's own `RegularSumcheckProver` /
   `batch_prove` / `batch_verify` end to end, confirming the masked sumcheck soundly reduces the
   `f + rho*g` claim and that `v = combined_sum - rho*s` recovers the base sum without revealing `f`'s
-  round polynomials. Opt-in; wiring into `sumcheck::zerocheck` (the AIR constraint check) is the
-  remaining integration step.
+  round polynomials. `MaskedZerocheck` extends this to the AIR constraint **zerocheck**: the
+  composition `(w, g) -> w^2 + w + rho*g` masks a Boolean-constraint check (in characteristic 2,
+  `w^2 + w` vanishes iff `w in {0,1}`, so the constraint part sums to zero and the claimed sum is
+  `rho*s`), which is the shape `sumcheck::zerocheck` reduces to (an eq-indicator times a constraint
+  composition). Both tests drive binius's own `RegularSumcheckProver` / `batch_prove` /
+  `batch_verify` end to end, confirming the masked (zero)sumcheck soundly reduces the claim while
+  hiding `w`'s round polynomials.
 
 - `crates/core/src/protocols/sumcheck/mod.rs`
   Register `pub mod zk;`.
