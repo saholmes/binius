@@ -22,11 +22,21 @@
 // wiring them requires changing `FRIParams` dimensioning and the verifier's final check). That
 // remains the last A2 step; it is not claimed here.
 
-use binius_field::{PackedField, TowerField};
+use binius_field::{BinaryField, ExtensionField, PackedExtension, PackedField, TowerField};
+use binius_ntt::AdditiveNTT;
+use binius_utils::SerializeBytes;
 use binius_math::MultilinearExtension;
 use rand::Rng;
 
-use super::verify::CommitMeta;
+use super::{error::Error, verify::CommitMeta};
+use crate::{
+	fiat_shamir::{CanSample, Challenger},
+	merkle_tree::{MerkleTreeProver, MerkleTreeScheme},
+	protocols::fri::{
+		self, prove_combination, verify_combination, CommitOutput, FRIParams,
+	},
+	transcript::{ProverTranscript, VerifierTranscript},
+};
 
 /// Samples a fresh, fully-random masking multilinear on `n_vars` variables. Committing this
 /// alongside the real batch randomises the merged FRI message, making the commitment hiding.
@@ -58,6 +68,99 @@ pub fn augment_commit_meta_with_mask<F: TowerField>(commit_meta: &CommitMeta) ->
 	}
 	counts[mask_vars] += 1;
 	CommitMeta::new(counts)
+}
+
+// ---------------------------------------------------------------------------------------------
+// A2 two-tree ZK opening, wired onto a real piop commitment.
+//
+// binius's `piop::prove` interleaves its FRI with the batch sumcheck, so the pointwise two-tree
+// combination `alpha*f + f'` (`fri::zk_pcs`) cannot be dropped into that interleaved loop without
+// replacing the PCS. What DOES compose cleanly — and is what these helpers provide — is running the
+// two-tree combination as a **zero-knowledge low-degree / opening proof on the piop-committed
+// codeword** `f`: the caller commits its witness batch with `piop::commit` (optionally with the A2
+// masking column for technique 1), and `prove_zk_opening` proves that committed codeword is close to
+// the RS code while hiding its opened symbols behind a fresh random companion `f'` (technique 2).
+// The evaluation-binding sumcheck is the separately-masked A3 path (`sumcheck::zk`); together they
+// give an opened-value-ZK opening of the piop commitment. `alpha` is bound after both `f` and `f'`
+// are committed, exactly as in `fri::zk_pcs`.
+
+/// Proves, in zero-knowledge, that the piop-committed codeword `codeword_f` (commitment `root_f`,
+/// Merkle state `committed_f`) is a low-degree codeword, hiding its opened symbols behind a fresh
+/// random companion `f'` built from the caller-supplied random message `fprime_message` (a message of
+/// the same shape the piop commit consumes; the caller supplies the randomness, so this carries no
+/// RNG dependency). Writes `root_f`, the companion commitment, `alpha`-derived material, and the
+/// two-tree query openings to `transcript`.
+#[allow(clippy::too_many_arguments)]
+pub fn prove_zk_opening<F, FA, P, NTT, MTProver, VCS, Challenger_>(
+	fri_params: &FRIParams<F, FA>,
+	ntt: &NTT,
+	merkle_prover: &MTProver,
+	codeword_f: &[P],
+	committed_f: &MTProver::Committed,
+	root_f: &VCS::Digest,
+	fprime_message: &[P],
+	transcript: &mut ProverTranscript<Challenger_>,
+) -> Result<(), Error>
+where
+	F: TowerField + ExtensionField<FA>,
+	FA: BinaryField,
+	P: PackedField<Scalar = F> + PackedExtension<FA>,
+	NTT: AdditiveNTT<FA> + Sync,
+	MTProver: MerkleTreeProver<F, Scheme = VCS>,
+	VCS: MerkleTreeScheme<F, Digest: SerializeBytes>,
+	Challenger_: Challenger,
+{
+	// Commit the fresh random companion f' with the same FRI parameters as f.
+	let CommitOutput { commitment: root_fprime, committed: committed_fprime, codeword: codeword_fprime } =
+		fri::commit_interleaved(fri_params.rs_code(), fri_params, ntt, merkle_prover, fprime_message)?;
+
+	// Bind alpha to BOTH commitments: write root_f and root_f' before sampling.
+	transcript.message().write(root_f);
+	transcript.message().write(&root_fprime);
+	let alpha: F = transcript.sample();
+
+	prove_combination(
+		fri_params,
+		ntt,
+		merkle_prover,
+		codeword_f,
+		committed_f,
+		&codeword_fprime,
+		&committed_fprime,
+		alpha,
+		transcript,
+	)?;
+	Ok(())
+}
+
+/// Verifies a [`prove_zk_opening`] proof against the known piop commitment `root_f`. Returns the
+/// fully-folded value of the combined codeword.
+pub fn verify_zk_opening<F, FA, VCS, Challenger_>(
+	fri_params: &FRIParams<F, FA>,
+	vcs: &VCS,
+	root_f: &VCS::Digest,
+	transcript: &mut VerifierTranscript<Challenger_>,
+) -> Result<F, Error>
+where
+	F: TowerField + ExtensionField<FA>,
+	FA: BinaryField,
+	VCS: MerkleTreeScheme<F, Digest: binius_utils::DeserializeBytes + PartialEq>,
+	Challenger_: Challenger,
+{
+	// Read the two commitments the prover bound; check the first is the claimed piop commitment.
+	let root_f_read: VCS::Digest =
+		transcript.message().read().map_err(|e| Error::FRI(fri::Error::TranscriptError(e)))?;
+	if &root_f_read != root_f {
+		return Err(Error::FRI(fri::Error::InvalidArgs(
+			"zk opening: committed codeword root does not match the claimed commitment".into(),
+		)));
+	}
+	let root_fprime: VCS::Digest =
+		transcript.message().read().map_err(|e| Error::FRI(fri::Error::TranscriptError(e)))?;
+	let alpha: F = transcript.sample();
+
+	let final_value = verify_combination(fri_params, vcs, &root_f_read, &root_fprime, alpha, transcript)?;
+	Ok(final_value)
 }
 
 #[cfg(test)]
@@ -230,6 +333,79 @@ mod tests {
 
 		assert_ne!(c_mask_a, c_mask_b, "independent masks must give unlinkable commitments");
 		assert_ne!(c_no_mask, c_mask_a, "masking must change the commitment");
+	}
+
+	#[test]
+	fn two_tree_zk_opening_on_a_real_piop_commitment() {
+		use super::{prove_zk_opening, verify_zk_opening};
+		use crate::{fiat_shamir::CanSample, protocols::fri};
+
+		let merkle_prover =
+			BinaryMerkleTreeProver::<_, Groestl256, _>::new(Groestl256ByteCompression);
+		let merkle_scheme = merkle_prover.scheme();
+		let mut rng = StdRng::seed_from_u64(9);
+
+		// A real committed batch, committed exactly as the piop does.
+		let n_vars = 8usize;
+		let commit_meta = CommitMeta::with_vars([n_vars]);
+		let fri_params = make_commit_params_with_optimal_arity::<_, FEncode, _>(
+			&commit_meta, merkle_scheme, SECURITY_BITS, LOG_INV_RATE,
+		)
+		.unwrap();
+		let ntt = SingleThreadedNTT::new(fri_params.rs_code().log_len()).unwrap();
+
+		let real_len = 1 << n_vars.saturating_sub(P::LOG_WIDTH);
+		let real: MultilinearExtension<P> = MultilinearExtension::new(
+			n_vars,
+			std::iter::repeat_with(|| P::random(&mut rng)).take(real_len).collect(),
+		)
+		.unwrap();
+		let committed_multilins = vec![MLEDirectAdapter::from(real)];
+		let CommitOutput { commitment: root_f, committed: committed_f, codeword: codeword_f } =
+			commit(&fri_params, &ntt, &merkle_prover, &committed_multilins).unwrap();
+
+		// Fresh random companion message f' of the same shape (caller-supplied randomness).
+		let fprime_message: Vec<P> = std::iter::repeat_with(|| P::random(&mut rng))
+			.take((fri_params.rs_code().dim() << fri_params.log_batch_size()) >> P::LOG_WIDTH)
+			.collect();
+
+		// Prove a zero-knowledge two-tree opening of the piop-committed codeword.
+		let mut proof = ProverTranscript::<HasherChallenger<Groestl256>>::new();
+		prove_zk_opening(
+			&fri_params, &ntt, &merkle_prover, &codeword_f, &committed_f, &root_f, &fprime_message,
+			&mut proof,
+		)
+		.unwrap();
+		let prover_sample = CanSample::<F>::sample(&mut proof);
+
+		// Verify against the known piop commitment root_f.
+		let mut proof = proof.into_verifier();
+		verify_zk_opening(&fri_params, merkle_scheme, &root_f, &mut proof)
+			.expect("zk opening of the piop commitment must verify");
+		assert_eq!(prover_sample, CanSample::<F>::sample(&mut proof), "transcripts stay in sync");
+
+		// A verifier that presents the WRONG commitment must be rejected (the opening is bound to
+		// the actual piop commitment).
+		let mut proof2 = ProverTranscript::<HasherChallenger<Groestl256>>::new();
+		prove_zk_opening(
+			&fri_params, &ntt, &merkle_prover, &codeword_f, &committed_f, &root_f, &fprime_message,
+			&mut proof2,
+		)
+		.unwrap();
+		let mut proof2 = proof2.into_verifier();
+		let wrong_root = fri::commit_interleaved(
+			fri_params.rs_code(),
+			&fri_params,
+			&ntt,
+			&merkle_prover,
+			&fprime_message,
+		)
+		.unwrap()
+		.commitment;
+		assert!(
+			verify_zk_opening(&fri_params, merkle_scheme, &wrong_root, &mut proof2).is_err(),
+			"an opening presented against the wrong commitment must be rejected"
+		);
 	}
 
 	#[test]

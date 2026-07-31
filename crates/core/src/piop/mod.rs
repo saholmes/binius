@@ -44,4 +44,7 @@ pub use commit::*;
 pub use error::*;
 pub use prove::*;
 pub use verify::{make_commit_params_with_optimal_arity, verify, CommitMeta, PIOPSumcheckClaim};
-pub use zk::{augment_commit_meta_with_mask, mask_multilinear, mask_n_vars};
+pub use zk::{
+	augment_commit_meta_with_mask, mask_multilinear, mask_n_vars, prove_zk_opening,
+	verify_zk_opening,
+};

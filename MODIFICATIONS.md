@@ -112,7 +112,17 @@ Binius's own test suite passes (`binius_core` 138/138, `binius_m3` unit tests).
 
 - `crates/core/src/piop/mod.rs`
   Register `mod zk;` and re-export `augment_commit_meta_with_mask`, `mask_multilinear`,
-  `mask_n_vars`.
+  `mask_n_vars`, `prove_zk_opening`, `verify_zk_opening`.
+
+- `crates/core/src/piop/zk.rs` (additions) — `prove_zk_opening` / `verify_zk_opening` wire the A2
+  two-tree combination (`fri::zk_pcs`) onto a real piop commitment: given a codeword committed by
+  `piop::commit`, they prove/verify a zero-knowledge low-degree opening of it, hiding the opened
+  symbols behind a fresh random companion `f'` with `alpha` bound after both commit. (binius's
+  `piop::prove` interleaves FRI with the batch sumcheck, so the pointwise combination is wired as a
+  ZK opening/proximity proof on the committed codeword rather than folded inside the interleaved
+  loop; the evaluation-binding sumcheck is the separately-masked A3 path.) Tests: honest round-trip
+  verifies against the known commitment; an opening presented against the wrong commitment is
+  rejected.
 
 - `crates/core/src/protocols/fri/zk_pcs.rs` (new file)
   A2 final query-phase piece (technique 2 of Construction 4.1): `prove_combination` /
