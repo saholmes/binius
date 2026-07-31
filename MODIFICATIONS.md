@@ -160,6 +160,17 @@ Binius's own test suite passes (`binius_core` 138/138, `binius_m3` unit tests).
 - `crates/core/src/protocols/sumcheck/mod.rs`
   Register `pub mod zk;`.
 
+- `crates/core/src/constraint_system/{prove,verify,mod}.rs` + `crates/core/Cargo.toml`
+  The single zero-knowledge entry point. `prove`/`verify` are unchanged forwarders to new
+  `prove_impl`/`verify_impl` carrying a `zk_opening` flag; `prove_zk`/`verify_zk` set it. When set
+  (and the FRI has round oracles), the prover emits — and the verifier checks — an A2 two-tree ZK
+  opening of the committed codeword (`piop::{prove,verify}_zk_opening`) between the ring-switch and
+  PIOP phases, hiding the opened FRI symbols behind a fresh random companion. The sound path is
+  byte-identical to `prove`; the opening is purely additive and opt-in. Cargo: enable rand's
+  `getrandom` feature on `binius_core` (default workspace rand has none) so the prover can sample the
+  companion from OS entropy. Validated end-to-end from the consumer repo on a real ML-DSA AIR
+  (`tests/zk_probe.rs::zk_prove_verify_entry_point_round_trips_on_a_real_mldsa_air`).
+
 - `crates/core/src/ring_switch/zk.rs` (new file) + `crates/core/src/ring_switch/mod.rs`
   (register `mod zk;`). Closes the ring-switching ZK caveat (the last of Diamond 2025/1015's own open
   items for our `B1` columns). The ring-switch reduction's witness-dependent transcript emissions

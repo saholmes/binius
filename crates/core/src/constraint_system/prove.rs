@@ -58,13 +58,14 @@ use crate::{
 
 /// Generates a proof that a witness satisfies a constraint system with the standard FRI PCS.
 #[instrument("constraint_system::prove", skip_all, level = "debug")]
-pub fn prove<U, Tower, Hash, Compress, Challenger_, Backend>(
+fn prove_impl<U, Tower, Hash, Compress, Challenger_, Backend>(
 	constraint_system: &ConstraintSystem<FExt<Tower>>,
 	log_inv_rate: usize,
 	security_bits: usize,
 	boundaries: &[Boundary<FExt<Tower>>],
 	mut witness: MultilinearExtensionIndex<PackedType<U, FExt<Tower>>>,
 	backend: &Backend,
+	zk_opening: bool,
 ) -> Result<Proof, Error>
 where
 	U: ProverTowerUnderlier<Tower>,
@@ -405,6 +406,32 @@ where
 	)?;
 	drop(ring_switch_span);
 
+	// A2 zero-knowledge opening (opt-in): before the interleaved PIOP proof, prove the committed
+	// codeword is low-degree while hiding its opened symbols behind a fresh random companion f'
+	// (two-tree combination alpha*f + f'). Statistical hiding over the extension field; adds no
+	// dependency to the sound path below. See piop::zk / fri::zk_pcs. Only applies when the FRI has
+	// round oracles; with none, the whole folded codeword is the terminate oracle and hiding comes
+	// from the masking column instead.
+	if zk_opening && fri_params.n_oracles() > 0 {
+		let mut rng = <rand::rngs::StdRng as rand::SeedableRng>::from_entropy();
+		let fprime_len = (fri_params.rs_code().dim() << fri_params.log_batch_size())
+			>> <PackedType<U, FExt<Tower>> as PackedField>::LOG_WIDTH;
+		let fprime_message: Vec<PackedType<U, FExt<Tower>>> =
+			std::iter::repeat_with(|| <PackedType<U, FExt<Tower>> as PackedField>::random(&mut rng))
+				.take(fprime_len)
+				.collect();
+		piop::prove_zk_opening(
+			&fri_params,
+			&ntt,
+			&merkle_prover,
+			&codeword,
+			&committed,
+			&commitment,
+			&fprime_message,
+			&mut transcript,
+		)?;
+	}
+
 	// Prove evaluation claims using PIOP compiler
 	let piop_compiler_span = tracing::info_span!(
 		"[phase] PIOP Compiler",
@@ -441,6 +468,84 @@ where
 	);
 
 	Ok(proof)
+}
+
+/// Proves a constraint system (no zero-knowledge). See [`prove_zk`] for the confidential variant.
+pub fn prove<U, Tower, Hash, Compress, Challenger_, Backend>(
+	constraint_system: &ConstraintSystem<FExt<Tower>>,
+	log_inv_rate: usize,
+	security_bits: usize,
+	boundaries: &[Boundary<FExt<Tower>>],
+	witness: MultilinearExtensionIndex<PackedType<U, FExt<Tower>>>,
+	backend: &Backend,
+) -> Result<Proof, Error>
+where
+	U: ProverTowerUnderlier<Tower>,
+	Tower: ProverTowerFamily,
+	Tower::B128: PackedTop<Tower>,
+	Hash: Digest + BlockSizeUser + FixedOutputReset + Send + Sync + Clone,
+	Compress: PseudoCompressionFunction<Output<Hash>, 2> + Default + Sync,
+	Challenger_: Challenger + Default,
+	Backend: ComputationBackend,
+	PackedType<U, Tower::B128>: PackedTop<Tower>
+		+ PackedFieldIndexable
+		+ RepackedExtension<PackedType<U, Tower::B8>>
+		+ RepackedExtension<PackedType<U, Tower::B16>>
+		+ RepackedExtension<PackedType<U, Tower::B32>>
+		+ RepackedExtension<PackedType<U, Tower::B64>>
+		+ RepackedExtension<PackedType<U, Tower::B128>>
+		+ PackedTransformationFactory<PackedType<U, Tower::FastB128>>,
+	PackedType<U, Tower::FastB128>: PackedTransformationFactory<PackedType<U, Tower::B128>>,
+{
+	prove_impl::<U, Tower, Hash, Compress, Challenger_, Backend>(
+		constraint_system,
+		log_inv_rate,
+		security_bits,
+		boundaries,
+		witness,
+		backend,
+		false,
+	)
+}
+
+/// Proves a constraint system with a zero-knowledge opening of the committed codeword: the opened FRI
+/// symbols are hidden behind a fresh random companion polynomial (A2 two-tree combination). The sound
+/// proof is identical to [`prove`]; verify with [`super::verify::verify_zk`].
+pub fn prove_zk<U, Tower, Hash, Compress, Challenger_, Backend>(
+	constraint_system: &ConstraintSystem<FExt<Tower>>,
+	log_inv_rate: usize,
+	security_bits: usize,
+	boundaries: &[Boundary<FExt<Tower>>],
+	witness: MultilinearExtensionIndex<PackedType<U, FExt<Tower>>>,
+	backend: &Backend,
+) -> Result<Proof, Error>
+where
+	U: ProverTowerUnderlier<Tower>,
+	Tower: ProverTowerFamily,
+	Tower::B128: PackedTop<Tower>,
+	Hash: Digest + BlockSizeUser + FixedOutputReset + Send + Sync + Clone,
+	Compress: PseudoCompressionFunction<Output<Hash>, 2> + Default + Sync,
+	Challenger_: Challenger + Default,
+	Backend: ComputationBackend,
+	PackedType<U, Tower::B128>: PackedTop<Tower>
+		+ PackedFieldIndexable
+		+ RepackedExtension<PackedType<U, Tower::B8>>
+		+ RepackedExtension<PackedType<U, Tower::B16>>
+		+ RepackedExtension<PackedType<U, Tower::B32>>
+		+ RepackedExtension<PackedType<U, Tower::B64>>
+		+ RepackedExtension<PackedType<U, Tower::B128>>
+		+ PackedTransformationFactory<PackedType<U, Tower::FastB128>>,
+	PackedType<U, Tower::FastB128>: PackedTransformationFactory<PackedType<U, Tower::B128>>,
+{
+	prove_impl::<U, Tower, Hash, Compress, Challenger_, Backend>(
+		constraint_system,
+		log_inv_rate,
+		security_bits,
+		boundaries,
+		witness,
+		backend,
+		true,
+	)
 }
 
 type TypeErasedZerocheck<'a, P> = Box<dyn ZerocheckProver<'a, P> + 'a>;

@@ -39,12 +39,13 @@ use crate::{
 
 /// Verifies a proof against a constraint system.
 #[instrument("constraint_system::verify", skip_all, level = "debug")]
-pub fn verify<U, Tower, Hash, Compress, Challenger_>(
+fn verify_impl<U, Tower, Hash, Compress, Challenger_>(
 	constraint_system: &ConstraintSystem<FExt<Tower>>,
 	log_inv_rate: usize,
 	security_bits: usize,
 	boundaries: &[Boundary<FExt<Tower>>],
 	proof: Proof,
+	zk_opening: bool,
 ) -> Result<(), Error>
 where
 	U: TowerUnderlier<Tower>,
@@ -193,6 +194,12 @@ where
 		sumcheck_claims: piop_sumcheck_claims,
 	} = ring_switch::verify::<_, Tower, _>(&system, &mut transcript)?;
 
+	// A2 zero-knowledge opening (opt-in): mirror of the prover's two-tree opening, checked against
+	// the committed codeword's commitment before the interleaved PIOP verification.
+	if zk_opening && fri_params.n_oracles() > 0 {
+		piop::verify_zk_opening(&fri_params, &merkle_scheme, &commitment, &mut transcript)?;
+	}
+
 	// Prove evaluation claims using PIOP compiler
 	piop::verify(
 		&commit_meta,
@@ -207,6 +214,58 @@ where
 	transcript.finalize()?;
 
 	Ok(())
+}
+
+/// Verifies a proof produced by [`super::prove::prove`] (no zero-knowledge).
+pub fn verify<U, Tower, Hash, Compress, Challenger_>(
+	constraint_system: &ConstraintSystem<FExt<Tower>>,
+	log_inv_rate: usize,
+	security_bits: usize,
+	boundaries: &[Boundary<FExt<Tower>>],
+	proof: Proof,
+) -> Result<(), Error>
+where
+	U: TowerUnderlier<Tower>,
+	Tower: TowerFamily,
+	Tower::B128: PackedTop<Tower>,
+	Hash: Digest + BlockSizeUser,
+	Compress: PseudoCompressionFunction<Output<Hash>, 2> + Default + Sync,
+	Challenger_: Challenger + Default,
+{
+	verify_impl::<U, Tower, Hash, Compress, Challenger_>(
+		constraint_system,
+		log_inv_rate,
+		security_bits,
+		boundaries,
+		proof,
+		false,
+	)
+}
+
+/// Verifies a proof produced by [`super::prove::prove_zk`] (with the zero-knowledge codeword opening).
+pub fn verify_zk<U, Tower, Hash, Compress, Challenger_>(
+	constraint_system: &ConstraintSystem<FExt<Tower>>,
+	log_inv_rate: usize,
+	security_bits: usize,
+	boundaries: &[Boundary<FExt<Tower>>],
+	proof: Proof,
+) -> Result<(), Error>
+where
+	U: TowerUnderlier<Tower>,
+	Tower: TowerFamily,
+	Tower::B128: PackedTop<Tower>,
+	Hash: Digest + BlockSizeUser,
+	Compress: PseudoCompressionFunction<Output<Hash>, 2> + Default + Sync,
+	Challenger_: Challenger + Default,
+{
+	verify_impl::<U, Tower, Hash, Compress, Challenger_>(
+		constraint_system,
+		log_inv_rate,
+		security_bits,
+		boundaries,
+		proof,
+		true,
+	)
 }
 
 pub fn max_n_vars_and_skip_rounds<F, Composition>(
