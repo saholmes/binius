@@ -32,6 +32,7 @@ mod prove;
 mod tests;
 mod tower_tensor_algebra;
 mod verify;
+mod zk;
 
 pub use common::*;
 pub use error::*;

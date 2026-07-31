@@ -145,5 +145,15 @@ Binius's own test suite passes (`binius_core` 138/138, `binius_m3` unit tests).
 - `crates/core/src/protocols/sumcheck/mod.rs`
   Register `pub mod zk;`.
 
+- `crates/core/src/ring_switch/zk.rs` (new file) + `crates/core/src/ring_switch/mod.rs`
+  (register `mod zk;`). Closes the ring-switching ZK caveat (the last of Diamond 2025/1015's own open
+  items for our `B1` columns). The ring-switch reduction's witness-dependent transcript emissions
+  (batched partial evaluations + row-batched evals) are F-linear maps of the witness, so masking the
+  committed witness (A2/A3, already present) masks them: `emit(t + m) = emit(t) + emit(m)`, uniform
+  `m ∈ L` ⇒ statistical hiding at `2^{-field_bits}`, no random oracle ⇒ quantum-safe by default. The
+  test validates the load-bearing fact — partial multilinear evaluation (fold-high) is F-linear —
+  against binius's real `evaluate_partial_high`. Full analysis in the consumer repo's
+  `paper/zk-ring-switch-closure.md`.
+
 All other files are unmodified from upstream. This derivative work continues to be
 licensed under the Apache License, Version 2.0.
