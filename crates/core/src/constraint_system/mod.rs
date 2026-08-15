@@ -13,7 +13,7 @@ use binius_macros::{DeserializeBytes, SerializeBytes};
 use channel::{ChannelId, Flush};
 use exp::Exp;
 pub use prove::{prove, prove_zk};
-pub use verify::{verify, verify_zk};
+pub use verify::{verify, verify_extract_eval_claims, verify_zk, ExtractedEvalClaim};
 
 use crate::oracle::{ConstraintSet, MultilinearOracleSet, OracleId};
 

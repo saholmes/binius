@@ -37,7 +37,19 @@ use crate::{
 	transcript::VerifierTranscript,
 };
 
-/// Verifies a proof against a constraint system.
+/// A reduced committed **PCS evaluation claim** surfaced from verification: the multilinear oracle, the
+/// evaluation point, and the claimed value that constraint-satisfaction is reduced to (via greedy
+/// evalcheck) just before the PIOP/FRI opening discharges it. Exposing these lets a caller fold the
+/// claims into an accumulator instead of relying on the in-proof FRI opening (recursion).
+#[derive(Clone, Debug)]
+pub struct ExtractedEvalClaim<F> {
+	pub oracle_id: OracleId,
+	pub eval_point: Vec<F>,
+	pub eval: F,
+}
+
+/// Verifies a proof against a constraint system, returning the reduced committed evaluation claims it
+/// derived (see [`ExtractedEvalClaim`]).
 #[instrument("constraint_system::verify", skip_all, level = "debug")]
 fn verify_impl<U, Tower, Hash, Compress, Challenger_>(
 	constraint_system: &ConstraintSystem<FExt<Tower>>,
@@ -46,7 +58,7 @@ fn verify_impl<U, Tower, Hash, Compress, Challenger_>(
 	boundaries: &[Boundary<FExt<Tower>>],
 	proof: Proof,
 	zk_opening: bool,
-) -> Result<(), Error>
+) -> Result<Vec<ExtractedEvalClaim<FExt<Tower>>>, Error>
 where
 	U: TowerUnderlier<Tower>,
 	Tower: TowerFamily,
@@ -181,6 +193,17 @@ where
 		&mut transcript,
 	)?;
 
+	// Surface the reduced committed evaluation claims (oracle, point, value) before the PIOP/FRI opening
+	// discharges them — the recursion hook (see `ExtractedEvalClaim`).
+	let extracted: Vec<ExtractedEvalClaim<FExt<Tower>>> = eval_claims
+		.iter()
+		.map(|c| ExtractedEvalClaim {
+			oracle_id: c.id,
+			eval_point: c.eval_point.to_vec(),
+			eval: c.eval,
+		})
+		.collect();
+
 	// Reduce committed evaluation claims to PIOP sumcheck claims
 	let system = ring_switch::EvalClaimSystem::new(
 		&oracles,
@@ -213,7 +236,7 @@ where
 
 	transcript.finalize()?;
 
-	Ok(())
+	Ok(extracted)
 }
 
 /// Verifies a proof produced by [`super::prove::prove`] (no zero-knowledge).
@@ -224,6 +247,35 @@ pub fn verify<U, Tower, Hash, Compress, Challenger_>(
 	boundaries: &[Boundary<FExt<Tower>>],
 	proof: Proof,
 ) -> Result<(), Error>
+where
+	U: TowerUnderlier<Tower>,
+	Tower: TowerFamily,
+	Tower::B128: PackedTop<Tower>,
+	Hash: Digest + BlockSizeUser,
+	Compress: PseudoCompressionFunction<Output<Hash>, 2> + Default + Sync,
+	Challenger_: Challenger + Default,
+{
+	verify_impl::<U, Tower, Hash, Compress, Challenger_>(
+		constraint_system,
+		log_inv_rate,
+		security_bits,
+		boundaries,
+		proof,
+		false,
+	)
+	.map(|_| ())
+}
+
+/// Verifies a proof (no zero-knowledge) AND returns the reduced committed PCS evaluation claims it
+/// derived ([`ExtractedEvalClaim`]) — the recursion hook. `Ok(claims)` iff the proof is valid; the claims
+/// are the `(oracle, point, value)` triples constraint-satisfaction was reduced to before the FRI opening.
+pub fn verify_extract_eval_claims<U, Tower, Hash, Compress, Challenger_>(
+	constraint_system: &ConstraintSystem<FExt<Tower>>,
+	log_inv_rate: usize,
+	security_bits: usize,
+	boundaries: &[Boundary<FExt<Tower>>],
+	proof: Proof,
+) -> Result<Vec<ExtractedEvalClaim<FExt<Tower>>>, Error>
 where
 	U: TowerUnderlier<Tower>,
 	Tower: TowerFamily,
@@ -266,6 +318,7 @@ where
 		proof,
 		true,
 	)
+	.map(|_| ())
 }
 
 pub fn max_n_vars_and_skip_rounds<F, Composition>(
