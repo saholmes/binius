@@ -46,6 +46,9 @@ pub struct KeccakSponge {
 	prev_shifts: Vec<StateMatrix<PackedLane8>>,
 	track0_mask: PackedLane8,
 	rate_lanes: usize,
+	/// For a SHARDED sponge (a block-run of a larger sponge): the injected initial state (track 0),
+	/// bound by the caller to a public value. `None` for a standard sponge (absorbs into the zero state).
+	initial_state: Option<StateMatrix<PackedLane8>>,
 }
 
 impl KeccakSponge {
@@ -118,7 +121,147 @@ impl KeccakSponge {
 			message.push(msg);
 		}
 
-		Self { perms, message, prev_shifts, track0_mask, rate_lanes }
+		Self { perms, message, prev_shifts, track0_mask, rate_lanes, initial_state: None }
+	}
+
+	/// Build a **sharded** sponge: a block-run of a larger sponge that absorbs its first block into an
+	/// INJECTED initial state instead of the zero state. The injected state (track 0 of each lane) is a fresh
+	/// committed [`StateMatrix`] the caller must bind to a public value (the previous shard's output state);
+	/// obtain it via [`Self::initial_state`]. The last block's output ([`Self::output`]) is this shard's
+	/// output state, to be pinned public and fed to the next shard. Block-wise sharding lets one huge sponge
+	/// be proved in Pi-sized pieces, chained by their 25-lane Keccak states across proofs.
+	pub fn new_with_initial_state<F>(table: &mut TableBuilder<F>, n_blocks: usize, rate_lanes: usize) -> Self
+	where
+		F: TowerField + ExtensionField<B1>,
+		<F as WithUnderlier>::Underlier: PackScalar<B1>,
+	{
+		assert!(n_blocks >= 1, "a sponge needs at least one block");
+		assert!(rate_lanes <= STATE_LANES, "rate cannot exceed the state");
+
+		let track0_mask: PackedLane8 = table.add_constant(
+			"sponge_track0_mask",
+			std::array::from_fn(|bit| if bit < LANE_BITS { B1::ONE } else { B1::ZERO }),
+		);
+		// The injected initial state (track 0): a committed state the caller binds to the previous shard's out.
+		let init: StateMatrix<PackedLane8> = StateMatrix::from_fn(|(x, y)| {
+			table.add_committed::<B1, { LANE_BITS * TRACKS }>(format!("sponge_initial_state[{x},{y}]"))
+		});
+
+		let mut perms: Vec<Keccakf> = Vec::with_capacity(n_blocks);
+		let mut message: Vec<StateMatrix<PackedLane8>> = Vec::with_capacity(n_blocks);
+		let mut prev_shifts: Vec<StateMatrix<PackedLane8>> = Vec::with_capacity(n_blocks.saturating_sub(1));
+
+		for b in 0..n_blocks {
+			let state_in = StateMatrix::from_fn(|(x, y)| {
+				table.add_committed::<B1, { LANE_BITS * TRACKS }>(format!("sponge_state_in[{b}][{x},{y}]"))
+			});
+			let kf = Keccakf::new(&mut table.with_namespace(format!("sponge_perm[{b}]")), state_in);
+			let msg = StateMatrix::from_fn(|(x, y)| {
+				table.add_committed::<B1, { LANE_BITS * TRACKS }>(format!("sponge_message[{b}][{x},{y}]"))
+			});
+			let state_in = kf.packed_state_in().clone();
+			if b == 0 {
+				// Absorb first block into the INJECTED state: input track 0 = initial_state XOR message.
+				for x in 0..5 {
+					for y in 0..5 {
+						table.assert_zero(
+							"sponge_absorb_first_injected",
+							(state_in[(x, y)] - init[(x, y)] - msg[(x, y)]) * track0_mask,
+						);
+					}
+				}
+			} else {
+				let prev_out = perms[b - 1].packed_state_out().clone();
+				let prev_shift = StateMatrix::from_fn(|(x, y)| {
+					table.add_shifted(
+						format!("sponge_prev_shift[{b}][{x},{y}]"),
+						prev_out[(x, y)],
+						PACKED_LOG_BITS,
+						OUT_TO_IN_SHIFT,
+						ShiftVariant::LogicalRight,
+					)
+				});
+				for x in 0..5 {
+					for y in 0..5 {
+						table.assert_zero(
+							"sponge_absorb",
+							(state_in[(x, y)] - prev_shift[(x, y)] - msg[(x, y)]) * track0_mask,
+						);
+					}
+				}
+				prev_shifts.push(prev_shift);
+			}
+			perms.push(kf);
+			message.push(msg);
+		}
+		Self { perms, message, prev_shifts, track0_mask, rate_lanes, initial_state: Some(init) }
+	}
+
+	/// The injected initial-state columns (track 0), present only for a sharded sponge built via
+	/// [`Self::new_with_initial_state`]. Bind these to the previous shard's output state (public).
+	pub fn initial_state(&self) -> Option<&StateMatrix<PackedLane8>> {
+		self.initial_state.as_ref()
+	}
+
+	/// Populate a sharded sponge whose absorb chain starts from `init_state` (25 lanes) rather than zero.
+	/// Also fills the injected initial-state columns (track 0 = `init_state`).
+	pub fn populate_with_initial_state<P>(
+		&self,
+		index: &mut TableWitnessSegment<P>,
+		blocks: &[StateMatrix<u64>],
+		init_state: &[u64; STATE_LANES],
+	) -> Result<()>
+	where
+		P: PackedFieldIndexable + PackedExtension<B1> + PackedExtension<B8>,
+		P::Scalar: TowerField + Pod + ExtensionField<B1> + ExtensionField<B8>,
+	{
+		assert_eq!(blocks.len(), self.perms.len(), "one message block per permutation");
+		let init_cols = self.initial_state.as_ref().expect("sharded sponge has initial_state columns");
+		// Fill the injected initial-state columns (track 0 = init_state).
+		for x in 0..5 {
+			for y in 0..5 {
+				let lane = x + 5 * y;
+				let mut cell = index.get_mut_as::<u64, B1, { LANE_BITS * TRACKS }>(init_cols[(x, y)])?;
+				cell[0] = init_state[lane];
+				for t in 1..TRACKS { cell[t] = 0; }
+			}
+		}
+		let mut running = *init_state;
+		for b in 0..self.perms.len() {
+			let blk = blocks[b].as_inner();
+			let mut input = running;
+			for i in 0..self.rate_lanes { input[i] ^= blk[i]; }
+			let input_sm = StateMatrix::from_values(input);
+			self.perms[b].populate_state_in(index, std::slice::from_ref(&input_sm))?;
+			self.perms[b].populate(index)?;
+			for x in 0..5 {
+				for y in 0..5 {
+					let lane = x + 5 * y;
+					let mut cell = index.get_mut_as::<u64, B1, { LANE_BITS * TRACKS }>(self.message[b][(x, y)])?;
+					cell[0] = if lane < self.rate_lanes { blk[lane] } else { 0 };
+					for t in 1..TRACKS { cell[t] = 0; }
+				}
+			}
+			if b >= 1 {
+				let prev_shift = &self.prev_shifts[b - 1];
+				for x in 0..5 {
+					for y in 0..5 {
+						let lane = x + 5 * y;
+						let mut cell = index.get_mut_as::<u64, B1, { LANE_BITS * TRACKS }>(prev_shift[(x, y)])?;
+						cell[0] = running[lane];
+						for t in 1..TRACKS { cell[t] = 0; }
+					}
+				}
+			}
+			let out = self.perms[b].read_state_outs(index)?.next().expect("one row");
+			running = *out.as_inner();
+		}
+		{
+			let mut mask = index.get_mut_as::<u64, B1, { LANE_BITS * TRACKS }>(self.track0_mask)?;
+			mask[0] = u64::MAX;
+			for t in 1..TRACKS { mask[t] = 0; }
+		}
+		Ok(())
 	}
 
 	/// The per-block message columns. Block `b`'s block lives in track 0 (the input track) of each
