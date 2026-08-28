@@ -1,9 +1,9 @@
 // Copyright 2025 Irreducible Inc.
 
-use binius_field::{ExtensionField, TowerField};
+use binius_field::{BinaryField, ExtensionField, Field, TowerField};
 use binius_math::ArithExpr;
 
-use crate::builder::B1;
+use crate::builder::{B1, B32};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -23,6 +23,12 @@ pub enum Error {
 pub enum StructuredDynSize {
 	/// A column whose values are incrementing binary field elements in lexicographic order.
 	Incrementing,
+	/// A column whose value at row `r` is `g^r`, where `g = F::MULTIPLICATIVE_GENERATOR`. Because
+	/// `g^{r-1} = g^r * g^{-1}` (multiplication by a constant), an adjacent row's value is a *linear*
+	/// function of this column's value -- which the additive `Incrementing` column cannot provide (integer
+	/// `-1` is not a field operation). This makes `Powers` the primitive for a sound *positional* cross-row
+	/// link over a channel: `g^r` is injective for `2^log_size <= ord(g) = 2^{F::N_BITS}-1`.
+	Powers,
 }
 
 impl StructuredDynSize {
@@ -31,6 +37,7 @@ impl StructuredDynSize {
 	pub fn expr<F: TowerField>(self, log_size: usize) -> Result<ArithExpr<F>, Error> {
 		match self {
 			StructuredDynSize::Incrementing => incrementing_expr::<F>(log_size),
+			StructuredDynSize::Powers => powers_expr::<F>(log_size),
 		}
 	}
 }
@@ -52,6 +59,60 @@ pub fn incrementing_expr<F: TowerField>(log_size: usize) -> Result<ArithExpr<F>,
 		.map(|i| ArithExpr::Var(i) * ArithExpr::Const(<F as ExtensionField<B1>>::basis(i)))
 		.sum::<ArithExpr<F>>();
 	Ok(expr)
+}
+
+/// Returns the arithmetic expression for a `Powers` column: row `r` (with little-endian bits `X_0..X_{n-1}`)
+/// takes value `g^r = \prod_i (g^{2^i})^{X_i}`. Since each `X_i \in {0,1}`, this is the multilinear
+///
+/// $$
+/// \prod_{i=0}^{n-1} \bigl(1 + X_i\,(g^{2^i} - 1)\bigr),
+/// $$
+///
+/// which is degree one in each variable and evaluates to `g^r` on the hypercube. `g` is
+/// `F::MULTIPLICATIVE_GENERATOR`; the values are distinct (injective tag) while `2^log_size < ord(g)`.
+pub fn powers_expr<F: TowerField>(log_size: usize) -> Result<ArithExpr<F>, Error> {
+	// The structured expression is evaluated over the table's TOP field `F` (see
+	// `constraint_system.rs`), so using `F::MULTIPLICATIVE_GENERATOR` would produce full-`F` values that
+	// cannot inhabit a small (B32/B64) tag column. Instead embed the B32 subfield generator into `F`: its
+	// powers stay inside B32 ⊂ F, so a `B32` tag column holds them, and gadget-side constants built from
+	// [`powers_value`] (the same embedding) match bit-for-bit.  B32's generator has order 2^32 − 1, so the
+	// tag is injective for `2^log_size < 2^32`.
+	if log_size >= 32 {
+		return Err(Error::ColumnSizeTooLarge);
+	}
+	let g = embed_b32_generator::<F>();
+	let mut expr = ArithExpr::Const(F::ONE);
+	let mut g_pow = g; // g^{2^0} = g
+	for i in 0..log_size {
+		// factor_i = 1 + X_i * (g^{2^i} - 1)
+		expr = expr * (ArithExpr::Const(F::ONE) + ArithExpr::Var(i) * ArithExpr::Const(g_pow - F::ONE));
+		g_pow = g_pow * g_pow; // g^{2^{i+1}}
+	}
+	Ok(expr)
+}
+
+/// The B32 multiplicative generator embedded into `F` via `F`'s `\mathbb{F}_2` basis (the same basis
+/// `incrementing_expr` uses). Requires only `ExtensionField<B1>`, so it works for any `TowerField` `F`.
+pub fn embed_b32_generator<F: TowerField>() -> F {
+	let bits = B32::MULTIPLICATIVE_GENERATOR.val();
+	(0..32)
+		.filter(|i| (bits >> i) & 1 == 1)
+		.map(|i| <F as ExtensionField<B1>>::basis(i))
+		.fold(F::ZERO, |a, b| a + b)
+}
+
+/// The value the `Powers` structured column takes at `row`, in the table field `F`: `g^row` where `g` is the
+/// embedded B32 generator ([`embed_b32_generator`]). Gadget code must build every tag constant (channel
+/// boundaries, the `g^{-1}` pull multiplier) from this and from [`powers_inv_value`] so they match the
+/// structured column exactly.
+pub fn powers_value<F: TowerField>(row: usize) -> F {
+	embed_b32_generator::<F>().pow([row as u64])
+}
+
+/// The inverse of the embedded B32 generator in `F` (the constant multiplier that turns `tag[row]` into
+/// `tag[row-1] = tag[row] * g^{-1}`).
+pub fn powers_inv_value<F: TowerField>() -> F {
+	embed_b32_generator::<F>().invert().expect("the multiplicative generator is nonzero")
 }
 
 #[cfg(test)]
@@ -82,6 +143,32 @@ mod tests {
 			let bits = decompose_index_to_hypercube_point::<B32>(5, i);
 			assert_eq!(evaluator.evaluate(&bits).unwrap(), B32::new(i as u32));
 		}
+	}
+
+	#[test]
+	fn test_powers_expr() {
+		// The Powers column equals the embedded-B32-generator powers `powers_value::<F>(row)`, and those are
+		// injective across the column range. Checked over B32 (embedding is the identity) and B128 (a genuine
+		// embedding), so the value helper the gadget uses is validated against the compiled expression.
+		for &n in &[5usize, 10] {
+			let expr32 = powers_expr::<B32>(n).unwrap();
+			let ev32 = ArithCircuitPoly::new(&expr32);
+			for i in 0..1usize << n {
+				let bits = decompose_index_to_hypercube_point::<B32>(n, i);
+				assert_eq!(ev32.evaluate(&bits).unwrap(), powers_value::<B32>(i));
+			}
+			let vals: std::collections::HashSet<_> = (0..1usize << n).map(powers_value::<B32>).collect();
+			assert_eq!(vals.len(), 1 << n);
+
+			let expr128 = powers_expr::<B128>(n).unwrap();
+			let ev128 = ArithCircuitPoly::new(&expr128);
+			for i in 0..1usize << n {
+				let bits = decompose_index_to_hypercube_point::<B128>(n, i);
+				assert_eq!(ev128.evaluate(&bits).unwrap(), powers_value::<B128>(i));
+			}
+		}
+		// g^{-1} really inverts the generator.
+		assert_eq!(powers_value::<B128>(1) * powers_inv_value::<B128>(), B128::ONE);
 	}
 
 	#[test]

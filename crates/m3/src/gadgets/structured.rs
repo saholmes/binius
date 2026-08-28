@@ -24,3 +24,23 @@ where
 	}
 	Ok(())
 }
+
+/// Fills a structured [`crate::builder::structured::StructuredDynSize::Powers`] B32 column: row `r` takes
+/// value `g^r`, where `g = B32::MULTIPLICATIVE_GENERATOR`. Matches [`super::super::builder::structured::powers_expr`].
+pub fn fill_powers_b32<P>(
+	witness: &mut TableWitnessSegment<P>,
+	col: Col<B32>,
+) -> Result<(), Error>
+where
+	P: PackedField<Scalar = B128> + PackedExtension<B32>,
+	PackedSubfield<P, B32>: PackedFieldIndexable,
+{
+	use binius_field::{BinaryField, Field};
+	let mut col_data = witness.get_scalars_mut(col)?;
+	let start_index = witness.index() << witness.log_size();
+	let g = B32::MULTIPLICATIVE_GENERATOR;
+	for (i, col_data_i) in col_data.iter_mut().enumerate() {
+		*col_data_i = g.pow((start_index + i) as u64);
+	}
+	Ok(())
+}

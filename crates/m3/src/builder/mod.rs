@@ -20,7 +20,7 @@ pub use constraint_system::*;
 pub use error::*;
 pub use expr::*;
 pub use statement::*;
-pub use structured::StructuredDynSize;
+pub use structured::{powers_inv_value, powers_value, StructuredDynSize};
 pub use table::*;
 pub use types::*;
 pub use witness::*;
